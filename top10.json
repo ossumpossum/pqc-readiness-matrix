@@ -1,0 +1,16 @@
+{
+  "note": "Committed manifest of entry ids so related_owasp_entries is validated against the real list rather than by a regex that cannot see a renumber. Ids only, no titles: a title nothing reads is a claim nothing checks. State on main as at 2026-10-30: nine entries are numbered, the QS02 slot is FREE following its merge into QS01 and QS03, and four candidate entries are still filed as QSxx_ with no number. QS01, QS03, QS05 and QS06 each have an open content PR, so every id here is provisional and needs one pass at v1.",
+  "verified_against": "https://github.com/OWASP/quantum-security-project/tree/main/quantum-top-10",
+  "verified_on": "2026-10-30",
+  "entries": [
+    { "id": "QS01" },
+    { "id": "QS03" },
+    { "id": "QS04" },
+    { "id": "QS05" },
+    { "id": "QS06" },
+    { "id": "QS07" },
+    { "id": "QS08" },
+    { "id": "QS09" },
+    { "id": "QS10" }
+  ]
+}

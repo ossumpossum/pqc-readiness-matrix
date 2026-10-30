@@ -1,0 +1,36 @@
+name: Validate PQC readiness matrix
+
+on:
+  pull_request:
+    paths: ['protocols/**', 'pqc-readiness.schema.json', 'validate.py', 'top10.json', 'tests/**']
+  push:
+    branches: [main]
+  schedule:
+    # Staleness check, and a backstop rather than the primary mechanism. GitHub documents
+    # that "in a public repository, scheduled workflows are automatically disabled when no
+    # repository activity has occurred in 60 days". The docs do not define "repository
+    # activity" and the clock runs on activity rather than on this file's age, so on a quiet
+    # repository this schedule can silently stop, which is exactly when rows go stale.
+    # Re-enabling needs a UI or API action, or a commit that changes the cron below.
+    # PR-time validation is the real gate.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38  # v5.4.0
+        with:
+          python-version: '3.12'
+      # No '||' fallback: a hash mismatch is the attack --require-hashes exists to stop,
+      # and falling back to an unverified install on failure defeats the control entirely.
+      - run: pip install --require-hashes -r requirements.txt
+      # Run the gate's own regression suite before trusting the gate.
+      - name: Gate self-test
+        run: python3 tests/test_gate.py
+      - name: Validate entries
+        run: python3 validate.py protocols
