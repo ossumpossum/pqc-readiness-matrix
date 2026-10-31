@@ -40,7 +40,8 @@
    "notes": "Two documents, two jobs, and they are conflated constantly. RFC 9954 fixes the hybrid construction; RFC 10024 names the groups and its Section 1 states it applies the RFC 9954 framework to ML-KEM.",
    "evidence": {
     "source_kind": "specification",
-    "independence": "third-party",
+    "independence": "first-party",
+    "independence_basis": "RFC 10024 is the document whose publication this status asserts, and its authors are the mechanism's proponents, so it is the primary record rather than corroboration. Labelled third-party until 2026-10-31.",
     "source": "https://www.rfc-editor.org/rfc/rfc10024.txt",
     "excerpt": "Post-Quantum Traditional (PQ/T) Hybrid Key Agreement Mechanisms for TLS 1.3",
     "verbatim": "yes",
@@ -52,38 +53,42 @@
    "implementations": [
     {
      "name": "OpenSSL",
-     "version": "3.5",
+     "version": "3.5.0",
      "default_enabled": "yes",
      "algorithms": [
       "X25519MLKEM768"
      ],
      "evidence": {
-      "source_kind": "release-notes",
+      "source_kind": "source-code",
       "independence": "first-party",
-      "source": "https://github.com/openssl/openssl/blob/openssl-3.5/NEWS.md",
-      "excerpt": "The default TLS supported groups list has been changed to include and prefer hybrid PQC KEM groups. Some practically unused groups were removed from the default list.",
+      "independence_basis": "The OpenSSL project authored this, and the claim is about the OpenSSL default, so the project's own tree at a pinned tag is the primary record of that default rather than a report about it.",
+      "reproduction": "Read TLS_DEFAULT_GROUP_LIST in ssl/t1_lib.c at tag openssl-3.5.0, or build that tag and run `openssl list -tls-groups`.",
+      "source": "https://raw.githubusercontent.com/openssl/openssl/refs/tags/openssl-3.5.0/ssl/t1_lib.c",
+      "excerpt": "\"?*X25519MLKEM768 / ?*X25519:?secp256r1 / ?X448:?secp384r1:?secp521r1 / ?ffdhe2048:?ffdhe3072\"",
       "verbatim": "yes",
-      "verified_on": "2026-10-14"
+      "verified_on": "2026-10-31"
      }
     },
     {
      "name": "Go crypto/tls",
-     "version": "1.24",
+     "version": "1.24.0",
      "default_enabled": "yes",
      "algorithms": [
       "X25519MLKEM768"
      ],
      "evidence": {
-      "source_kind": "release-notes",
+      "source_kind": "source-code",
       "independence": "first-party",
-      "source": "https://go.dev/doc/go1.24",
-      "excerpt": "The new post-quantum X25519MLKEM768 key exchange mechanism is now supported and is enabled by default when Config.CurvePreferences is nil. GODEBUG setting tlsmlkem=0 reverts the default.",
+      "independence_basis": "The Go team authored this, and the claim is about the Go default, so the pinned source tree is the primary record of that default rather than a report about it.",
+      "reproduction": "Read defaultCurvePreferences in src/crypto/tls/defaults.go at tag go1.24.0: X25519MLKEM768 is returned first unless GODEBUG tlsmlkem=0.",
+      "source": "https://raw.githubusercontent.com/golang/go/refs/tags/go1.24.0/src/crypto/tls/defaults.go",
+      "excerpt": "return []CurveID{X25519MLKEM768, X25519, CurveP256, CurveP384, CurveP521}",
       "verbatim": "yes",
-      "verified_on": "2026-10-14"
+      "verified_on": "2026-10-31"
      }
     }
    ],
-   "notes": "Deliberately incomplete, and both entries are first-party. BoringSSL, NSS and the browsers are widely reported to ship X25519MLKEM768 and are omitted rather than asserted, because they were not checked for this row."
+   "notes": "Deliberately incomplete, and both entries are first-party by design: for the question 'what does this stack do by default', the stack's own source at a pinned tag is the primary record, and independence would mean telemetry or a third-party scan, which is a different claim about a different population. Re-sourced 2026-10-31 from release notes to pinned source code, because the OpenSSL excerpt was not a literal substring of NEWS.md and the bullet it quoted did not name X25519MLKEM768. BoringSSL, NSS and the browsers are widely reported to ship X25519MLKEM768 and are omitted rather than asserted, because they were not checked."
   },
   "interoperability": {
    "status": "not_assessed",
@@ -100,30 +105,59 @@
     },
     {
      "class": "preference-ordering",
-     "detail": "Classical groups listed ahead of hybrid ones produce classical sessions with no attacker present."
+     "detail": "In a stack whose group list is preference-ordered, classical groups ahead of hybrid ones produce classical sessions with no attacker present. Not universal: Go 1.24 ignores the order of Config.CurvePreferences and reads it only as a set of enabled exchanges, so for Go the exposure is omission from that set, not ordering within it.",
+     "evidence": {
+      "source_kind": "release-notes",
+      "independence": "first-party",
+      "independence_basis": "Written by the Go team about Go's own behaviour, which is the subject of the exception recorded in this exposure.",
+      "source": "https://go.dev/doc/go1.24",
+      "excerpt": "The order of Config.CurvePreferences is now ignored, and the contents are only used to determine which key exchanges to enable when the field is populated.",
+      "verbatim": "yes",
+      "verified_on": "2026-10-31"
+     }
     },
     {
      "class": "unverified-config",
-     "detail": "Hybrid enabled in configuration and never confirmed as negotiated in production."
+     "detail": "Hybrid enabled in configuration and never confirmed as negotiated in production. Carries no evidence here, deliberately: the gate reports it rather than letting an unevidenced assertion sit in a structured field."
     },
     {
      "class": "mtu-disablement",
-     "detail": "Larger PQC ClientHello messages fragmented or dropped by middleboxes, where the common operational resolution is to disable hybrid to restore service."
+     "detail": "Larger PQC ClientHello messages fragmented or dropped by middleboxes, where the common operational resolution is to disable hybrid to restore service. Go documents that reason for reverting its own default.",
+     "evidence": {
+      "source_kind": "release-notes",
+      "independence": "first-party",
+      "independence_basis": "The Go team documenting why operators revert Go's own default. It evidences the documented reason, not the prevalence of the problem, which nothing in this row measures.",
+      "source": "https://go.dev/doc/go1.24",
+      "excerpt": "This can be useful when dealing with buggy TLS servers that do not handle large records correctly, causing a timeout during the handshake",
+      "verbatim": "yes",
+      "verified_on": "2026-10-31"
+     }
     },
     {
      "class": "unverified-config",
-     "detail": "Go: the hybrid default applies only when Config.CurvePreferences is nil, so any application that pins curve preferences silently does not get it, and the GODEBUG setting tlsmlkem=0 reverts the default fleet-wide. Go's own release notes give the operational reason operators flip it: buggy TLS servers that mishandle large records, causing a handshake timeout. This is the exposure the implementation excerpt originally hid by truncating before the condition."
+     "detail": "Go: the hybrid default applies only when Config.CurvePreferences is nil, so any application that populates it without X25519MLKEM768 silently does not get hybrid, and GODEBUG tlsmlkem=0 reverts the default fleet-wide. This is the exposure the implementation excerpt originally hid by truncating before the condition.",
+     "evidence": {
+      "source_kind": "source-code",
+      "independence": "first-party",
+      "independence_basis": "The Go team's own source tree at a pinned tag, which is the primary record of the conditional this exposure describes.",
+      "reproduction": "Read src/crypto/tls/defaults.go at tag go1.24.0, or run a client under GODEBUG=tlsmlkem=0 and observe the offered groups.",
+      "source": "https://raw.githubusercontent.com/golang/go/refs/tags/go1.24.0/src/crypto/tls/defaults.go",
+      "excerpt": "if tlsmlkem.Value() == \"0\" {",
+      "verbatim": "yes",
+      "verified_on": "2026-10-31"
+     }
     }
    ],
    "evidence": {
     "source_kind": "specification",
-    "independence": "third-party",
+    "independence": "first-party",
+    "independence_basis": "RFC 8446 defines the Finished MAC this claim depends on. For a claim about TLS 1.3's own behaviour the specification is the constitutive document, not a disinterested observer of it. Labelled third-party until 2026-10-31.",
     "source": "https://www.rfc-editor.org/rfc/rfc8446#section-4.4.4",
     "excerpt": "The Finished message is the final message in the Authentication Block. It is essential for providing authentication of the handshake and of the computed keys.",
     "verbatim": "yes",
     "verified_on": "2026-10-14"
    },
-   "notes": "This axis is why one score will not do. The protocol is published and on by default in two stacks and a deployment can still be classical end to end. Written up in QS06, so this points at the entry rather than restating it."
+   "notes": "This axis is why one score will not do. The protocol is published and on by default in two stacks and a deployment can still be classical end to end. Written up in QS06, so this points at the entry rather than restating it. On the 180d TTL: it is keyed to the exposures, which are deployment behaviour and move with implementations, not to the on_negotiation_failure claim, which rests on RFC 8446 and does not rot. Two exposures carry no evidence and the gate says so."
   }
  },
  "related_owasp_entries": [

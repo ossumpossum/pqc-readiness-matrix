@@ -63,6 +63,32 @@ def _all_evidence(node):
             yield from _all_evidence(v)
 
 
+# Fixtures cite a host that is deliberately NOT one RFC 2606 reserves, because the gate now
+# rejects those outright and a fixture under example.test would fail for a reason unrelated
+# to the case under test. Nothing fetches it. The reserved names get their own cases below.
+FIXTURE_HOST = "https://sources.pqcm-fixture.org"
+
+
+def fixture_evidence(**over):
+    """A complete, schema-valid evidence block for fixtures to vary one field of.
+
+    Seven fixtures hand-rolled this dict. When `independence_basis` became mandatory on
+    every value, three of them silently became invalid for that reason instead of testing
+    what they claimed, and the suite reported them as broken rather than as vacuous only
+    because the expected outcome happened to be acceptance. One constructor means the next
+    required field breaks every fixture at once, loudly, in one place.
+    """
+    ev = {
+        "source_kind": "test-report",
+        "independence": "third-party",
+        "independence_basis": "Fixture. Stands in for a disinterested report.",
+        "source": FIXTURE_HOST + "/r",
+        "verified_on": dt.date.today().isoformat(),
+    }
+    ev.update(over)
+    return ev
+
+
 def mutate(fn):
     e = copy.deepcopy(GOOD)
     fn(e)
@@ -78,8 +104,8 @@ def blank_implementation(e):
         "status": "default-on",
         "implementations": [{
             "name": "  ", "version": "1", "default_enabled": "yes", "algorithms": ["x"],
-            "evidence": {"source_kind": "release-notes", "independence": "first-party",
-                         "source": "https://example.test/x", "verified_on": "2026-10-14"}}]}
+            "evidence": fixture_evidence(source_kind="release-notes",
+                                         independence="first-party")}]}
 
 
 def default_on_unsupported(e):
@@ -124,8 +150,7 @@ def multi_vendor_all_fail(e):
     e["axes"]["interoperability"] = {
         "status": "multi-vendor",
         "tested_pairs": [{"a": "OpenSSL", "b": "Go crypto/tls", "result": "fails",
-                          "evidence": {"source_kind": "test-report", "independence": "third-party",
-                                       "source": "https://example.test/r", "verified_on": "2026-10-14"}}]}
+                          "evidence": fixture_evidence()}]}
 
 
 def multi_vendor_third_stack_only_fails(e):
@@ -193,7 +218,7 @@ def settled_status_with_only_undated_documents(e):
         "id": "SP 800-999",
         "title": "Totally Real Standard",
         "status": "other",
-        "url": "https://example.test/doc",
+        "url": FIXTURE_HOST + "/doc",
     }]
 
 
@@ -205,7 +230,11 @@ def unknown_independence_without_basis(e):
     establish. The escape hatch must not be cheaper than the three positive values it exists
     to replace, or it becomes the default and the field means nothing again.
     """
-    e["axes"]["standardisation"]["evidence"]["independence"] = "unknown"
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["independence"] = "unknown"
+    # Popped explicitly. Setting the value is no longer enough to remove the basis, because
+    # the basis became mandatory on every value, so without this the case tested nothing.
+    ev.pop("independence_basis", None)
 
 
 def provenance_maximal_without_basis(e):
@@ -217,15 +246,74 @@ def provenance_maximal_without_basis(e):
     fabricated row graded as the fresher of the two. `independently-reproducible` now costs a
     sentence naming what to re-run.
 
-    What this case does NOT prove: adding a plausible basis string makes this row pass again,
-    because nothing fetches `source`. That is gap 3, and it is the only thing that would turn
-    provenance into verification.
+    What this case does NOT prove: the same row under a host RFC 2606 does not reserve, with
+    a plausible basis string, still passes, because nothing fetches `source`. That is gap 3,
+    it is tested below as `plausible-host-fabrication-still-passes`, and it is the only thing
+    that would turn provenance into verification.
     """
     for ev in _all_evidence(e):
-        ev["independence"] = "independently-reproducible"
-        ev["source"] = "https://example.invalid/pqc/does-not-exist"
+        ev["independence"] = "third-party"
+        ev.pop("independence_basis", None)
+        ev["source"] = FIXTURE_HOST + "/pqc/does-not-exist"
         ev["excerpt"] = "This document confirms the mechanism is fully deployed and interoperable."
         ev["verbatim"] = "yes"
+
+
+def reserved_source_host(host):
+    """RFC 2606 reserves these for documentation, so a citation cannot live under one.
+
+    The fabricated row that drove the whole #46 change cited https://example.invalid/... on
+    every axis and passed with exit 0. This is the one part of gap 3 that can be a gate
+    rather than a warning: no network, so link rot and rate limits cannot make it flaky.
+    """
+    def fn(e):
+        for ev in _all_evidence(e):
+            ev["source"] = f"https://{host}/evidence"
+    return fn
+
+
+def reserved_document_url(e):
+    """The same rule has to cover `documents[].url`, which is not an evidence block and so
+    is not reached by the evidence walk. Asserted because it was added separately."""
+    e["axes"]["standardisation"]["documents"][0]["url"] = "https://standards.invalid/rfc10024"
+
+
+def removed_enum_value(e):
+    """`independently-reproducible` was removed from the enum in the second #46 round.
+
+    It conflated two dimensions: the other three values describe the relation between the
+    evidence author and the subject of the claim, while this one described a property of
+    method. A vendor's own pinned harness was both, with no precedence rule. Reproducibility
+    moved to its own `reproduction` field.
+    """
+    e["axes"]["standardisation"]["evidence"]["independence"] = "independently-reproducible"
+
+
+def empty_reproduction(e):
+    """`reproduction` is optional, but present-and-blank is not a reproduction recipe."""
+    e["axes"]["implementation"]["implementations"][0]["evidence"]["reproduction"] = "  "
+
+
+def unknown_independence_past_ttl(e):
+    """`unknown` must not be an exemption. It describes the evidence, not a floor status.
+
+    The draft comment asserted this and the suite did not check it, which is the pattern the
+    comment criticises: a behavioural claim nothing asserts. Raised in review 2026-10-31.
+    """
+    for ev in _all_evidence(e["axes"]["implementation"]):
+        ev["independence"] = "unknown"
+        ev["independence_basis"] = "Affiliation not stated in the source."
+    set_all_dates(e["axes"]["implementation"],
+                  (dt.date.today() - dt.timedelta(days=200)).isoformat())
+
+
+def whitespace_basis(e):
+    """A present-but-empty basis is not a basis. `$defs/nonEmpty` carries a \\S pattern, and
+    a `maxLength` sibling of `$ref` only applies under draft 2020-12, which this schema
+    declares and the gate pins. Asserted so a loader change to older tooling fails here."""
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["independence"] = "unknown"
+    ev["independence_basis"] = "   \t  "
 
 
 MUST_FAIL = {
@@ -253,6 +341,16 @@ MUST_FAIL = {
     "settled-status-with-only-undated-documents": settled_status_with_only_undated_documents,
     "unknown-independence-without-basis": unknown_independence_without_basis,
     "provenance-maximal-without-basis": provenance_maximal_without_basis,
+    "unknown-independence-past-ttl": unknown_independence_past_ttl,
+    "whitespace-independence-basis": whitespace_basis,
+    "reserved-source-host-invalid": reserved_source_host("example.invalid"),
+    "reserved-source-host-test": reserved_source_host("fixtures.test"),
+    "reserved-source-host-example-tld": reserved_source_host("docs.example"),
+    "reserved-source-host-localhost": reserved_source_host("localhost"),
+    "reserved-source-host-example-com": reserved_source_host("www.example.com"),
+    "reserved-document-url": reserved_document_url,
+    "removed-enum-value-independently-reproducible": removed_enum_value,
+    "empty-reproduction-string": empty_reproduction,
 }
 
 
@@ -314,7 +412,8 @@ def mutation_report():
     }
     src = (ROOT / "validate.py").read_text()
     base = _suite_score(ROOT)
-    print(f"\nMutation report. Baseline: {base[0]} of {base[1]} behaviours correct.")
+    print(f"\nMutation report. Baseline: {base[0]} of {base[1]} behaviours correct "
+          + "(" + " ".join(f"{k}={g}/{t}" for k, (t, g) in sorted(base[2].items())) + ").")
     for label, (pat, repl) in mutants.items():
         mutated, n = re.subn(pat, repl, src, count=1)
         if not n or mutated == src:
@@ -324,20 +423,33 @@ def mutation_report():
             shadow = pathlib.Path(td) / "qsp46"
             shutil.copytree(ROOT, shadow, ignore=shutil.ignore_patterns("__pycache__"))
             (shadow / "validate.py").write_text(mutated)
-            ok, tot = _suite_score(shadow)
+            ok, tot, pops = _suite_score(shadow)
+            detail = " ".join(
+                f"{k} {base[2].get(k, (0, 0))[1] - g} of {t} killed"
+                for k, (t, g) in sorted(pops.items()))
             print(f"  {label:48s}  {ok:2d} of {tot} still correct "
-                  f"-> {base[0] - ok} case(s) depend on this layer")
+                  f"-> {base[0] - ok} killed  ({detail})")
     print("\nA mutant that changes nothing would leave the score untouched, which is what "
-          "\n'vacuous' would look like. Read the kill counts, not a single number.")
+          "\n'vacuous' would look like. Read the kill counts, not a single number -- and read "
+          "\nthem per population: forcing the exit code to success cannot kill a case that "
+          "\nexpects acceptance, so only the `reject` column means anything for that mutant.")
     return 0
 
 
 def _suite_score(root):
-    """Run this file against `root` and return (correct, total) parsed from its own output."""
+    """Run this file against `root`; return (correct, total, {population: (total, correct)})."""
     r = subprocess.run([sys.executable, str(pathlib.Path(root) / "tests" / "test_gate.py")],
                        capture_output=True, text=True)
-    m = re.search(r"(\d+) of (\d+) gate behaviours correct", r.stdout + r.stderr)
-    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    out = r.stdout + r.stderr
+    m = re.search(r"(\d+) of (\d+) gate behaviours correct", out)
+    pops = {}
+    b = re.search(r"^breakdown: (.*)$", out, re.M)
+    if b:
+        for part in b.group(1).split():
+            k, _, frac = part.partition("=")
+            good, _, tot = frac.partition("/")
+            pops[k] = (int(tot), int(good))
+    return (int(m.group(1)), int(m.group(2)), pops) if m else (0, 0, pops)
 
 
 def main():
@@ -465,13 +577,182 @@ def main():
         rc_a, out_a = run_gate(d)
         flipped = copy.deepcopy(GOOD)
         for ev in _all_evidence(flipped):
-            ev["independence"] = "first-party"
+            ev["independence"] = "third-party"
         (d / (flipped["slug"] + ".json")).write_text(json.dumps(flipped))
         rc_b, out_b = run_gate(d)
+        # The output must DIFFER, because the value is printed beside every axis status and
+        # in the row census. It must not differ in WARNINGS: see
+        # `no-label-pattern-buys-a-cleaner-run` below, which is the other half of this.
         differs = (out_a != out_b
-                   and out_b.count("rests only on") > out_a.count("rests only on"))
+                   and "/first-party" in out_a and "/third-party" in out_b
+                   and out_a.count("warn:") == out_b.count("warn:"))
         results.append(("independence-is-read-not-decorative", "accept both, differ",
                         rc_a == 0 and rc_b == 0 and differs, out_a + "\n--- flipped ---\n" + out_b))
+
+    # --- a row resting entirely on evidence that establishes nothing stays VISIBLE ---
+    # `unknown` is the honest value and it must not be quiet. The first round graded it as
+    # weak and warned, which this case asserted via the warning text; the grading is gone, so
+    # the assertion moved to the printed provenance, where it is not gameable. The blind spot
+    # that motivated it is still worth recording: with only a first-party arm asserted, a
+    # one-word mutant of the weak-value list left the whole suite green.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        for ev in _all_evidence(e):
+            ev["independence"] = "unknown"
+            ev["independence_basis"] = "Affiliation not stated in the source."
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("unknown-only-evidence-is-reported", "accept, provenance shown",
+                        rc == 0 and "unknown:7" in out and "/unknown" in out, out))
+
+    # --- NO label pattern buys a cleaner run. This is @leprecha1's third point, measured. ---
+    # Two earlier attempts both failed this. 40f737f warned when an axis rested only on weak
+    # evidence, so the honest exemplar warned twice and an all-`third-party` fabrication of
+    # the same row warned zero times. A uniformity warning fixed that case and immediately
+    # rewarded a fabricated MIX. The invariant below is what rules the whole family out:
+    # relabelling every block, in any direction, must not change how many warnings a row
+    # earns. Only absences warn, and relabelling cannot fill an absence.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        honest = copy.deepcopy(GOOD)
+        (d / (honest["slug"] + ".json")).write_text(json.dumps(honest))
+        rc_h, out_h = run_gate(d)
+        counts = {}
+        for label in ("first-party", "derivative", "third-party", "unknown"):
+            e = copy.deepcopy(GOOD)
+            for ev in _all_evidence(e):
+                ev["independence"] = label
+                ev["independence_basis"] = "x"
+            (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+            rc, out = run_gate(d)
+            counts[label] = (rc, out.count("warn:"))
+        same = {v for v in counts.values()} == {(rc_h, out_h.count("warn:"))}
+        results.append(("no-label-pattern-buys-a-cleaner-run", "same warnings for every label",
+                        same, f"honest={(rc_h, out_h.count('warn:'))} relabelled={counts}"))
+
+    # --- and the fabrication that the gate genuinely CANNOT catch, asserted as passing ---
+    # Stated as a test so the README's gap 3 cannot quietly become a claim that it is closed.
+    # Every block third-party with a one-word basis, every excerpt invented and marked
+    # verbatim, dated today, under a host RFC 2606 does not reserve: this passes, and the
+    # only thing that would stop it is fetching `source` and checking `excerpt` against it.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        for ev in _all_evidence(e):
+            ev["independence"] = "third-party"
+            ev["independence_basis"] = "An independent laboratory."
+            ev["source"] = FIXTURE_HOST + "/report"
+            ev["excerpt"] = "Fully interoperable and deployed by default everywhere."
+            ev["verbatim"] = "yes"
+            ev["verified_on"] = dt.date.today().isoformat()
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("plausible-host-fabrication-still-passes", "accept (gap 3, stated)",
+                        rc == 0, out))
+
+    # --- an exposure with no evidence is reported ---
+    # Version 2 could not express one at all: known_exposures items set
+    # additionalProperties:false with no evidence property, so all five exposures on the
+    # exemplar were unevidenced by contract, in the axis the proposal calls most important.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        for exp in e["axes"]["failure_mode"]["known_exposures"]:
+            exp.pop("evidence", None)
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        n = out.count("carries no evidence")
+        results.append(("every-unevidenced-exposure-is-reported", "accept, one warn each",
+                        rc == 0 and n == len(e["axes"]["failure_mode"]["known_exposures"]),
+                        f"warned {n} times\n" + out))
+
+    # --- `derivative` is accepted, and exists because the axis was not exhaustive ---
+    # A blog restating a vendor's release notes is not the subject, so it is not first-party,
+    # and it took the subject's word for it, so it is not third-party. Under the previous
+    # enum it had no correct value, which is how a required field gets a wrong answer.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        ev = e["axes"]["standardisation"]["evidence"]
+        ev["independence"] = "derivative"
+        ev["independence_basis"] = ("Trade-press article restating the IETF announcement "
+                                    "rather than independently establishing publication.")
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("derivative-is-accepted-with-a-basis", "accept",
+                        rc == 0 and "derivative:1" in out, out))
+
+    # --- reproduction is optional, and earns nothing ---
+    # It replaced the enum value `independently-reproducible`. Nothing here re-runs it, so a
+    # row must neither need it nor benefit from it; it is printed as a count and no more.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        bare = copy.deepcopy(GOOD)
+        for ev in _all_evidence(bare):
+            ev.pop("reproduction", None)
+        (d / (bare["slug"] + ".json")).write_text(json.dumps(bare))
+        rc_a, out_a = run_gate(d)
+        full = copy.deepcopy(GOOD)
+        for ev in _all_evidence(full):
+            ev["reproduction"] = "Re-run the published harness at the pinned tag."
+        (d / (full["slug"] + ".json")).write_text(json.dumps(full))
+        rc_b, out_b = run_gate(d)
+        results.append(("reproduction-is-optional-and-earns-nothing", "accept both, same warns",
+                        rc_a == 0 and rc_b == 0
+                        and out_a.count("warn:") == out_b.count("warn:")
+                        and "repro=0/" in out_a and "repro=7/7" in out_b,
+                        out_a + out_b))
+
+    # --- a FAILED pair cannot speak for a claim that the pair interoperates ---
+    # This gate already filters the multi-vendor vendor count on `result == "interoperates"`.
+    # The independence check did not, so a disinterested report that a pair FAILED cleared
+    # the warning on a `pairwise` status still earned entirely by first-party evidence.
+    # Found in review 2026-10-31; the same defect one rule over.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        today = dt.date.today().isoformat()
+        e["axes"]["interoperability"] = {"status": "pairwise", "tested_pairs": [
+            {"a": "OpenSSL", "b": "Go crypto/tls", "result": "interoperates",
+             "evidence": fixture_evidence(source_kind="release-notes",
+                                         independence="first-party")},
+            {"a": "OpenSSL", "b": "Go crypto/tls", "result": "fails",
+             "evidence": fixture_evidence()}]}
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        # The printed provenance for a `pairwise` status must come from the pair that
+        # INTEROPERATES, not from a disinterested report that a pair FAILED. This gate
+        # already filters the multi-vendor vendor count that way; the provenance did not,
+        # so a failure was being credited to the claim it refutes.
+        results.append(("failed-pair-does-not-supply-pairwise-provenance",
+                        "accept, provenance from the working pair",
+                        rc == 0 and "intero=pairwise/first-party" in out, out))
+
+    # --- nor can an implementation that is not the one earning the status ---
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        e["axes"]["implementation"]["implementations"].append({
+            "name": "IrrelevantStack", "version": "0.1", "default_enabled": "no",
+            "algorithms": ["X25519MLKEM768"],
+            "evidence": fixture_evidence()})
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("non-default-implementation-does-not-supply-provenance",
+                        "accept, provenance from the default-on entries",
+                        rc == 0 and "implem=default-on/first-party" in out, out))
+
+    # --- a FAILING row prints its independence counts too ---
+    # The print was in the pass branch only, withholding the mix from the one reader who
+    # needs it most: whoever is fixing the row. Raised in review 2026-10-31.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = mutate(default_on_unsupported)
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("failing-rows-print-independence-counts", "reject, with counts",
+                        rc != 0 and "FAIL" in out and "indep=" in out, out))
 
     # --- the manifest must fail CLOSED, not open ---
     # Deleting top10.json previously made every related_owasp_entries value pass: a row citing
@@ -508,6 +789,17 @@ def main():
     print()
     print(f"{len(results) - bad} of {len(results)} gate behaviours correct"
           + ("" if bad else "  (run with --mutate to measure whether this suite is vacuous)"))
+    # Machine-readable, for the mutation report to split by population. A case expecting
+    # REJECTION can die when the exit code is forced to success; a case expecting acceptance
+    # cannot, because the mutant agrees with it. Aggregating the two made that mutant's
+    # number drift upward every time an acceptance case was added, which looked like the
+    # suite weakening when it was the metric mixing populations.
+    pops = {}
+    for name, expect, ok, _ in results:
+        key = "reject" if (expect.startswith("reject") or expect == "refuse to run") else "accept"
+        tot, good = pops.get(key, (0, 0))
+        pops[key] = (tot + 1, good + (1 if ok else 0))
+    print("breakdown: " + " ".join(f"{k}={g}/{t}" for k, (t, g) in sorted(pops.items())))
     return 1 if bad else 0
 
 

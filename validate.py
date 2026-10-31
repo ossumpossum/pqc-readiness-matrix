@@ -50,10 +50,17 @@ FLOOR = {
 # documents to carry a real publication date, so the "document newer than the evidence" clock
 # cannot be switched off by omitting a field.
 STANDARDISATION_SETTLED = ("approved", "published", "superseded", "deprecated", "withdrawn")
-# Independence values that do not establish the claim against a disinterested source.
-# `unknown` is here because it asserts nothing, not because it is suspect: it is the honest
-# value, and it must still be visible rather than counting as provenance.
-INDEPENDENCE_WEAK = ("first-party", "unknown")
+# Fixed display order, matching the schema enum. The row census prints every value
+# including the zeros: ordering by frequency, or printing only what is present, makes a
+# census read as a ranking, which is the trust score this schema exists to refuse.
+INDEPENDENCE_VALUES = ("first-party", "derivative", "third-party", "unknown")
+# RFC 2606 reserves these names for documentation and testing, so a citation cannot live
+# under one. Section 2 reserves the TLDs, section 3 the three second-level domains. This is
+# the one part of gap 3 that can be a GATE rather than a warning: it needs no network, so
+# link rot and rate limits cannot make it flaky, and it is what kills the fabricated row
+# that motivated this change.
+RESERVED_TLDS = ("test", "example", "invalid", "localhost")
+RESERVED_DOMAINS = ("example.com", "example.net", "example.org")
 
 
 def die(msg):
@@ -81,6 +88,19 @@ def parse_date(s):
         return None
 
 
+def reserved_name(url):
+    """The host of `url`, if RFC 2606 reserves it for documentation. Otherwise None."""
+    m = re.match(r"^https://([^/?#:]+)", str(url))
+    if not m:
+        return None
+    host = m.group(1).rstrip(".").lower()
+    if host in RESERVED_DOMAINS or any(host.endswith("." + d) for d in RESERVED_DOMAINS):
+        return host
+    if host.rsplit(".", 1)[-1] in RESERVED_TLDS:
+        return host
+    return None
+
+
 def walk_evidence(node):
     if isinstance(node, dict):
         if "verified_on" in node and "source_kind" in node:
@@ -92,9 +112,63 @@ def walk_evidence(node):
             yield from walk_evidence(v)
 
 
-def axis_independence(axis_obj):
-    """The set of independence values supporting one axis."""
-    return {ev.get("independence") for ev in walk_evidence(axis_obj) if ev.get("independence")}
+def supporting_evidence(axis, axis_obj):
+    """The evidence blocks that EARN this axis's status, not every block under it.
+
+    Counting every block let one unrelated source speak for a claim it does not support.
+    Measured in review: adding a third-party test report to an implementation whose
+    `default_enabled` is "no" cleared the warning on a `default-on` status still earned
+    entirely by two first-party sources, and a third-party report that a pair FAILED cleared
+    it on a `pairwise` status. The second is this gate's own multi-vendor defect one rule over:
+    there, vendors are counted only from pairs with `result == "interoperates"`, and the same
+    filter belongs here.
+    """
+    status = axis_obj.get("status")
+    if axis in ("standardisation", "failure_mode"):
+        ev = axis_obj.get("evidence")
+        return [ev] if isinstance(ev, dict) else []
+    if axis == "implementation":
+        impls = axis_obj.get("implementations", [])
+        if status == "default-on":
+            impls = [i for i in impls if i.get("default_enabled") == "yes"]
+        elif status == "reverted":
+            impls = [i for i in impls if i.get("withdrawn_in_version")]
+        return [i["evidence"] for i in impls if isinstance(i.get("evidence"), dict)]
+    if axis == "interoperability":
+        pairs = axis_obj.get("tested_pairs", [])
+        if status in ("pairwise", "multi-vendor"):
+            pairs = [p for p in pairs if p.get("result") == "interoperates"]
+        return [p["evidence"] for p in pairs if isinstance(p.get("evidence"), dict)]
+    return list(walk_evidence(axis_obj))
+
+
+def axis_independence(axis, axis_obj):
+    """The set of independence values on the evidence that earns this axis's status."""
+    return {ev.get("independence") for ev in supporting_evidence(axis, axis_obj)
+            if ev.get("independence")}
+
+
+def axis_provenance(axis, axis_obj):
+    """The independence values earning this axis's status, for display beside it.
+
+    Printed rather than scored. It rides on the status line specifically so the field
+    cannot go decorative again: a reader cannot see `default-on` without also seeing whose
+    word it rests on, and no arrangement of values makes the line read as better or worse.
+    """
+    if not axis_obj or axis_obj.get("status") == FLOOR.get(axis):
+        return "-"
+    kinds = axis_independence(axis, axis_obj)
+    return "+".join(sorted(kinds)) if kinds else "no-evidence"
+
+
+def independence_census(blocks):
+    """Counts per value in schema order, including zeros, plus the reproduction count."""
+    counts = {k: 0 for k in INDEPENDENCE_VALUES}
+    for ev in blocks:
+        k = ev.get("independence", "?")
+        counts[k] = counts.get(k, 0) + 1
+    repro = sum(1 for ev in blocks if ev.get("reproduction"))
+    return " ".join(f"{k}:{v}" for k, v in counts.items()) + f" repro={repro}/{len(blocks)}"
 
 
 def axis_evidence_dates(axis_obj):
@@ -151,29 +225,47 @@ def check_entry(entry, today, top10):
                             f"so it fails: an unowned row cannot stay green forever]")
                 errs.append(msg)
 
-    # --- provenance is required on every evidence object, so the gate has to read it ---
-    # It previously did not. `independence` was mandatory and NO rule here consulted it, so
-    # flipping every block on a row from `independently-reproducible` to `first-party`
-    # produced a byte-identical verdict: a required field that nothing checked, which is the
-    # same defect as a manifest carrying titles nothing reads. Raised by @leprecha1 on
-    # issue #46 as the risk of false confidence through classification alone, and measured.
+    # --- a citation cannot live under a name reserved for documentation ---
+    # RFC 2606. The fabricated row that motivated the #46 changes cited
+    # https://example.invalid/... on all four axes and passed with exit 0, and in the first
+    # round it recovered that pass for one character of basis text. This is a hard failure
+    # and it needs no network, which is what makes it a gate.
+    for ev in walk_evidence(entry):
+        bad = reserved_name(ev.get("source"))
+        if bad:
+            errs.append(f"evidence source host {bad!r} is reserved by RFC 2606 for "
+                        f"documentation and testing, so it cannot be a citation")
+    for doc in axes.get("standardisation", {}).get("documents", []):
+        bad = reserved_name(doc.get("url"))
+        if bad:
+            errs.append(f"document {doc.get('id')} url host {bad!r} is reserved by RFC 2606 "
+                        f"for documentation and testing")
+
+    # --- NOT HERE: any warning keyed to WHICH independence value an author chose ---
+    # Two were tried and both were removed, because each rewarded the lie it was meant to
+    # expose. 40f737f warned when an axis rested only on weak evidence: an honest row
+    # warned and a row that typed `third-party` over the same URLs did not. Adding a
+    # uniformity warning fixed that for a uniform lie and immediately rewarded a fabricated
+    # MIX, which the honest exemplar does not have. Offline, nothing here can tell a true
+    # `third-party` label from a false one, so every such rule grades the author's typing.
+    # That is the thing @leprecha1 asked to be ruled out on issue #46, and the answer is to
+    # stop grading rather than to pick a better counterweight.
     #
-    # This REPORTS and does not fail, and the exemplar is the reason. Its implementation axis
-    # is `default-on` on two first-party sources, because a vendor's own release notes are the
-    # best evidence that exists for that vendor's default. A gate that failed such a row would
-    # not produce better evidence; it would produce rows relabelled `third-party` to get green,
-    # which is the gaming this design is supposed to remove. Making it fail is a one-line
-    # change if the project decides a status above some threshold must carry a disinterested
-    # source, but that is a policy call for the project rather than for this gate.
-    for axis in TTL_DAYS:
-        obj = axes.get(axis)
-        if not obj or obj.get("status") == FLOOR[axis]:
-            continue
-        kinds = axis_independence(obj)
-        if kinds and kinds <= set(INDEPENDENCE_WEAK):
-            warns.append(f"{axis}: status {obj.get('status')!r} rests only on "
-                         f"{'/'.join(sorted(kinds))} evidence, with no third-party or "
-                         f"independently-reproducible source")
+    # The field is still read, and harder than before. It is mandatory, it must carry a
+    # justifying sentence on every value, and `axis_provenance` prints it next to the
+    # status it supports on every row, pass or fail. That is what surfaced two mislabels in
+    # this repo's own exemplar, where RFC 10024 was `third-party` evidence that RFC 10024 is
+    # published. Everything that still warns or fails here is an ABSENCE -- a missing
+    # basis, no document carrying a publication date, an unevidenced exposure, a reserved
+    # host, a breached TTL -- and an author cannot relabel their way out of an absence.
+
+    # --- an exposure with no evidence is the free-text column this schema objects to ---
+    # Version 2 could not express one: known_exposures items set additionalProperties:false
+    # with no evidence property, so all five on the exemplar were unevidenced by contract.
+    for i, exp in enumerate(axes.get("failure_mode", {}).get("known_exposures", [])):
+        if not isinstance(exp.get("evidence"), dict):
+            warns.append(f"failure_mode: known_exposure {i} ({exp.get('class')}) carries no "
+                         f"evidence, so it is an assertion in a structured field")
 
     std = axes.get("standardisation", {})
 
@@ -335,29 +427,30 @@ def main():
                 errs.append(f"protocol/mechanism_class {pair} already covered by {seen_pair[pair]}")
             seen_pair[pair] = f.name
 
+        # Printed on BOTH branches. It was in the pass branch only, which withheld it from
+        # the one reader who needs it most: whoever is fixing the row. A census, not a score:
+        # every value in schema order including the zeros, because printing only what is
+        # present and sorting it alphabetically made `independently-reproducible:4` read as a
+        # top mark. Row-level rather than per-axis, since a single trust number for a row is
+        # the thing this schema exists to refuse and the per-axis picture is in the warnings.
+        mix = independence_census(list(walk_evidence(entry)))
+
         if errs:
             failed += 1
-            print(f"FAIL {f.name}")
+            print(f"FAIL {f.name}  indep={mix}")
             for e in errs:
                 print(f"    {e}")
         else:
-            ages, summary = [], ""
+            ages = []
             for axis in TTL_DAYS:
                 d = axis_evidence_dates(entry.get("axes", {}).get(axis, {}))
                 if d:
                     ages.append((today - min(d)).days)
             summary = " ".join(
-                f"{a[:6]}={entry.get('axes', {}).get(a, {}).get('status', '?')}" for a in TTL_DAYS)
-            # Printed because the renderer does not exist yet and provenance a reader cannot see
-            # cannot be contested. Counts, not a score: a single trust number for a row is the
-            # thing this schema exists to refuse.
-            counts = {}
-            for ev in walk_evidence(entry):
-                k = ev.get("independence", "?")
-                counts[k] = counts.get(k, 0) + 1
-            mix = ",".join(f"{k}:{v}" for k, v in sorted(counts.items())) or "none"
-            print(f"ok   {f.name}  oldest_evidence={max(ages) if ages else 'n/a'}d  {summary}"
-                  f"  indep={mix}")
+                f"{a[:6]}={entry.get('axes', {}).get(a, {}).get('status', '?')}"
+                f"/{axis_provenance(a, entry.get('axes', {}).get(a))}" for a in TTL_DAYS)
+            age = f"{max(ages)}d" if ages else "n/a"
+            print(f"ok   {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
         for w in warns:
             print(f"     warn: {w}")
 

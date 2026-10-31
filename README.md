@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          36 behaviours the gate must have
+tests/test_gate.py          55 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -30,7 +30,7 @@ typed. TTLs are per axis, because one global number is wrong in both directions:
 | standardisation | 365d | An RFC number does not rot in six months |
 | implementation | 90d | A `default-on` claim can rot faster than this, so treat 90d as an enforceable review cadence rather than a guarantee |
 | interoperability | 180d | A plugfest result ages with the stacks, not with the spec |
-| failure_mode | 180d | Tracks deployment behaviour, which moves with implementations |
+| failure_mode | 180d | Keyed to the **exposures**, which are deployment behaviour and move with implementations, not to the negotiation-failure claim, which rests on RFC 8446 and does not rot. A row whose only failure-mode evidence is a specification is carrying the wrong evidence for this TTL |
 
 Each axis has **one** floor status that asserts nothing and is therefore exempt: `none` for
 standardisation and implementation, `not_assessed` for interoperability and failure_mode. Note that
@@ -56,44 +56,92 @@ Two classes is the smallest split that fixes the TLS case, not a claim to be the
 SSH wants KEX plus host auth plus user auth, DNSSEC has no key establishment at all, and a Noise-style
 static key does both jobs in one primitive. Whoever owns those rows should name their own classes.
 
-## Evidence provenance: what each `independence` value means
+## Evidence provenance: what `independence` means, and what it deliberately does not
 
 Added after review on [#46](https://github.com/OWASP/quantum-security-project/issues/46), where
 @leprecha1 asked for reproducible criteria per value, an explicit way to say "not established", and
-an assurance that mandatory classification does not become a substitute for verification. All three
-were right, and the first two were simply missing: the field carried a one-line rationale and no test.
+an assurance that mandatory classification does not become a substitute for verification. The first
+two were simply missing. The third took two attempts to answer honestly, and both failures are
+recorded below, because the second one is instructive.
 
 **Independence is a property of the evidence-to-claim pair, not of the document.** The same RFC is
-third-party evidence that a mechanism is standardised and first-party evidence that its own authors'
-product ships it. That is why the field sits on each evidence object rather than on a registry of
-sources, and why the same URL can legitimately carry different values on two different rows.
+first-party evidence of its own publication and third-party evidence about a protocol it merely
+references. That is why the field sits on each evidence object rather than on a registry of sources,
+and why the same URL can legitimately carry different values on two different rows.
 
-| Value | The test | Typical case | Basis required |
-|---|---|---|---|
-| `first-party` | The evidence author and the subject of the claim share an interest | A vendor's release notes about that vendor's implementation; a specification written by the implementers; vendor telemetry | no |
-| `third-party` | The author is not the subject and did not take the subject's word for it | An independent test report; a CVE analysis; a paper measuring someone else's code | no |
-| `independently-reproducible` | A reader holding the named artifacts can re-run it and get the same answer | A published test harness with pinned versions; a plugfest procedure anyone can repeat | **yes**, naming what to re-run |
-| `unknown` | Cannot be established from the source | Authorship or affiliation not stated and not resolvable | **yes**, saying why |
+**One axis per field.** The first round shipped `first-party | third-party |
+independently-reproducible | unknown`, which conflated two questions: three of those values describe
+the relation between the evidence's author and the subject of the claim, while `independently-
+reproducible` describes a property of method. A vendor's own pinned test harness is both, and there
+was no precedence rule, so the same evidence had two defensible values. Reproducibility moved to its
+own optional `reproduction` field and the enum is now a single axis.
 
-`independence_basis` is required for the last two and optional for the first two. The asymmetry is
-deliberate: `unknown` needs a reason so it cannot become a dump, and `independently-reproducible` is
-the strongest value in the enum while previously asserting reproducibility without naming anything to
-reproduce. `first-party` and `third-party` are cheap for a reviewer to check against the source URL.
+| Value | The test | Typical case |
+|---|---|---|
+| `first-party` | The author and the subject of the claim share an interest | A project's own source tree or release notes, about that project's behaviour; a specification, about its own contents |
+| `derivative` | The author is not the subject, but the content restates the subject's assertion rather than establishing it | Trade press repeating a vendor announcement; a CVE record authored by the vendor's own CNA |
+| `third-party` | The author is not the subject and did not take the subject's word for it | An independent test report; a measurement of someone else's deployed code; telemetry collected by an unrelated operator |
+| `unknown` | Authorship or affiliation cannot be established from the source | Affiliation not stated and not resolvable |
+
+**Apply them in that order; the order is the precedence rule.** `derivative` exists because the axis
+was not exhaustive without it: a blog restating a vendor's release notes is not the subject, so it is
+not first-party, and it took the subject's word for it, so it is not third-party. Under the previous
+enum it had no correct value, which is how a required field gets a wrong answer entered sincerely.
+Note where this puts a CVE record: most are authored by the affected vendor's own CNA, so `third-party`
+is wrong for the common case. The first round's table gave "a CVE analysis" as a typical third-party
+case and that was simply an error.
+
+**`independence_basis` is required on every value.** One sentence naming who authored the evidence and
+how that relates to this claim. The first round required it only on `unknown` and
+`independently-reproducible`, arguing the other two were cheap to check against the source URL. That
+argument was wrong on this repository's own evidence: the exemplar labelled RFC 10024 `third-party`
+evidence for the claim that RFC 10024 is published, and labelled RFC 8446 `third-party` for a property
+RFC 8446 defines. A URL shows a host, not an authorship. Requiring the sentence is what surfaces the
+mislabel, and both are corrected in this commit.
+
+**Nothing in this schema grades evidence, and that is the answer to the third point.** Two versions of
+a grading rule were written and both were removed, because each rewarded the lie it was meant to
+expose:
+
+1. The first warned when an axis rested only on weak evidence. Measured: the honest exemplar warned
+   twice, and a fabrication of the same row with `third-party` typed over every block warned zero
+   times. The honest row looked worse than the invented one.
+2. The second added a warning for a *uniform* provenance answer across all four axes, which fixed
+   that case and immediately rewarded a fabricated **mix** instead.
+
+The pattern is the finding. Offline, nothing here can tell a true `third-party` label from a false
+one, so any rule keyed to which label an author chose grades their typing. So the gate stopped
+grading. What it does instead is harder to game and is what actually found bugs:
+
+- The label is **mandatory** and must carry a justifying sentence.
+- It is **printed next to the status it supports**, on every row, pass or fail:
+  `implem=default-on/first-party`. A reader cannot see a status without seeing whose word it rests on.
+- Everything that still warns or fails is an **absence** rather than a grade: a missing basis, no
+  cited document carrying a publication date, an exposure with no evidence, a source under a reserved
+  name, a breached TTL. An author cannot relabel their way out of an absence.
+
+`tests/test_gate.py` asserts this directly: relabelling every block on a row, to any of the four
+values, must not change how many warnings the row earns.
+
+**`reproduction`** is optional, and earns a row nothing. Nothing here re-runs anything, so it is an
+instruction to a human reader and the gate reports it as a count. That is deliberate: in the first
+round the strongest-sounding enum value was the better-rewarded lie.
 
 **Three residuals, stated rather than implied.**
 
-1. **Nothing stops `third-party` being typed over a vendor URL**, and that is now the cheapest false
-   value in the enum because it needs no basis. The gate cannot settle it. What it can do is show the
-   mix, which it does: every passing row prints its `indep=` counts, so a vendor host sitting under a
-   `third-party` label is visible to a reader. That is contestability by display rather than by
-   validation, and it is the honest limit.
+1. **A plausible host still defeats this.** A row with `third-party` on every block, a one-line basis,
+   invented excerpts marked `verbatim: yes`, dated today, under a host nobody can check offline,
+   passes. It is committed as a test case named `plausible-host-fabrication-still-passes` so this
+   cannot quietly become a claim that it does not. What **is** now rejected is a source under a name
+   RFC 2606 reserves for documentation: `.test`, `.example`, `.invalid`, `.localhost`, and
+   `example.com/.net/.org`. That kills the specific fabricated row that motivated these changes, it
+   needs no network, and it is the only part of gap 3 that can be a gate rather than a warning.
 2. **`unknown` is not an exemption.** It describes the evidence, not a floor status, so it does not
    relax a TTL and does not excuse a status from needing evidence.
 3. **Provenance is not validity.** This schema records where a claim came from, which is cheap, and
-   cannot assess whether the claim is true, which is not. Classification must not be read as a trust
-   score, which is why the gate prints counts and never a composite number. The step that would turn
-   provenance into verification is fetching `source` and confirming `excerpt` appears there; that is
-   gap 3 and it is not done.
+   cannot assess whether the claim is true, which is not. The step that would turn provenance into
+   verification is fetching `source` and confirming `excerpt` appears there; that is gap 3 and it is
+   not done.
 
 ## What the gate enforces beyond types
 
@@ -113,28 +161,54 @@ reproduce. `first-party` and `third-party` are cheap for a reviewer to check aga
   two contradictory rows **that name the protocol the same way** cannot both pass. The protocol name is
   normalised to alphanumerics first, so `TLS1.3` and `TLS 1.3` collide as intended; see gap 9 for what
   that still does not catch.
+- A `source` or document `url` under a name **RFC 2606** reserves for documentation is rejected:
+  `.test`, `.example`, `.invalid`, `.localhost`, and `example.com/.net/.org`. The fabricated row that
+  motivated the #46 changes cited `https://example.invalid/...` on every axis and validated with exit
+  0. This needs no network, so link rot and rate limits cannot make it flaky, which is what lets it be
+  a gate rather than a warning. The check lives in `validate.py` rather than in the schema because
+  expressing it as a pattern needs a negative lookahead no reviewer can audit by eye; the cost is that
+  a consumer validating against the schema alone does not get it.
 - `independence` is **read**, which it previously was not. It was required on every evidence object
-  and no rule consulted it, so flipping every block on a row from `independently-reproducible` to
-  `first-party` left the verdict byte-identical: a required field that nothing checked. An axis above
-  its floor whose supporting evidence is entirely `first-party` or `unknown` is now **reported**, and
-  every passing row prints its independence counts.
-  This reports and does not fail, and the exemplar is the reason: its implementation axis is
-  `default-on` on two first-party sources, because a vendor's own release notes are the best evidence
-  that exists for that vendor's default. A gate that failed such a row would not produce better
-  evidence, it would produce rows relabelled to get green. Making it fail is a one-line change if the
-  project decides a status above some threshold must carry a disinterested source, but that is a
-  policy call for the project rather than for this gate.
+  and no rule consulted it, so flipping every block on a row left the verdict byte-identical: a
+  required field that nothing checked. It is now mandatory **with a justifying sentence on every
+  value**, and it is printed beside the status it supports on every row, pass or fail
+  (`implem=default-on/first-party`). What the gate deliberately does **not** do is grade it. See
+  "Evidence provenance" above for the two grading rules that were written, measured, and removed for
+  rewarding the fabrication over the honest row.
+- The provenance printed for an axis comes only from the evidence that **earns** its status: the pairs
+  that interoperate, the implementations that are actually `default_enabled`. Counting every block
+  under the axis let a disinterested report that a pair **failed** speak for a claim that the pair
+  works, which is the multi-vendor vendor-count defect one rule over.
+- An entry in `known_exposures` with no evidence is **reported**. Version 2 could not express one:
+  the item schema set `additionalProperties: false` with no evidence property, so all five exposures
+  on the exemplar were unevidenced by contract, in the axis the proposal calls most important. Two of
+  the five still are, and the gate says so on every run rather than letting them pass as structure.
 - Discovery is recursive and case-insensitive, and a stray non-JSON file under `protocols/` is a
   failure, because a renderer may still read it.
 - The gate **fails closed** in both directions that matter. Without `jsonschema` it exits 2 rather than
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 36 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 55 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
-measurable rather than asserted. Measured on 2026-10-31: disabling the semantic checks leaves 23 of 36
-correct, disabling the schema layer 25 of 36, and forcing the exit code to success 6 of 36.
+measurable rather than asserted.
+
+The report splits by what each case expects, because the aggregate was uninterpretable: a case
+expecting **rejection** can die when the exit code is forced to success, and a case expecting
+acceptance cannot, since the mutant agrees with it. Mixing the two made that mutant's number drift
+upward every time an acceptance case was added, which read as the suite weakening when it was the
+metric mixing populations. Measured 2026-10-31, against 43 rejection cases and 12 acceptance cases:
+
+| Mutant | Rejection cases killed | Acceptance cases killed |
+|---|---|---|
+| semantic layer returns no findings | 18 of 43 | 2 of 12 |
+| schema layer yields no errors | 14 of 43 | 0 of 12 |
+| exit code always reports success | 41 of 43 | 0 of 12 |
+
+The two rejection cases that survive the exit-code mutant are the two that exit **2** through the
+gate's own `die()` path, so they do not depend on the mutated return at all. That is the correct
+result rather than a hole.
 
 ## Known gaps, stated rather than discovered later
 
@@ -150,20 +224,30 @@ These are limits of what is here, not a to-do list for the project.
    design is reacting to. Closing it needs a CI step resolving each id against the IETF Datatracker and
    asserting the revision is current and the state is not `replaced`. The exemplar's citations were
    checked by hand on 2026-10-30; doing it by hand is the gap.
-3. **No link checking and no content verification.** `source` must be `https://`, and nothing fetches
-   it, snapshots it, or confirms that `excerpt` appears there. `verbatim: yes` is an author's assertion.
-   While rebuilding this, two of the exemplar's own excerpts were found truncated immediately before a
-   clause that qualified the claim, which is why that field cannot be trusted without a check.
+3. **No link checking and no content verification.** `source` must be `https://` and must not sit
+   under a name RFC 2606 reserves, and that is the whole of what is checked. Nothing fetches it,
+   snapshots it, or confirms that `excerpt` appears there, so `verbatim: yes` remains an author's
+   assertion. Two distinct failures of that field have now been found in this repository's own single
+   row: two excerpts truncated immediately before a clause that qualified the claim, and one that was
+   **not a literal substring of the cited file at all**, because `NEWS.md` hard-wraps it and the bullet
+   quoted did not name the mechanism the row is about. A different bullet did.
+   Two practical notes for whoever closes this. A literal substring check will fail true rows whose
+   source is hard-wrapped, and it cannot work at all against an HTML page, where the rendered text a
+   human quotes is not a substring of the served bytes. That is why the exemplar's implementation
+   evidence now cites raw source files at pinned tags, where the excerpt **is** literal; it is checked
+   against the fetched bytes in the commit that introduced it, which is not the same as being checked
+   on every run.
 4. **The review burden is real.** One row per mechanism class means up to 60 rows for 30 protocols,
    600 or more evidence blocks, and with these TTLs roughly 540 axis re-verifications a year. That is
    not sustainable by one person. Six to eight rows is the sane starting point: TLS twice, SSH twice,
    IKEv2, DNSSEC.
 5. **No way to contest a cell.** One maintainer, one evidence block per claim. There is no `disputed`
    flag, no second attestation, and no way for a claim to carry two independent sources, which is the
-   property that matters most when a source is first-party. Partly narrowed on 2026-10-31: a
-   first-party-only axis is now reported and every row prints its independence counts, so the
-   condition is at least **visible**. Visible is not contestable. A reader who disagrees with a cell
-   still has nowhere in the data to say so, and that remains open.
+   property that matters most when a source is first-party. Narrower than it was, and not closed:
+   every axis now prints whose word its status rests on, and an unevidenced exposure is reported, so
+   the condition is **visible**. Visible is not contestable. A reader who disagrees with a cell still
+   has nowhere in the data to say so, and on this design that is the gap that matters most after the
+   renderer.
 6. **A PR is checked by its own copy of the gate.** The workflow checks out the PR head, so a PR that
    edits both a row and `validate.py` grades itself, and a green check on such a PR means nothing. This
    is inherent to `pull_request` CI rather than specific to this design; the mitigation is human review
@@ -176,16 +260,19 @@ These are limits of what is here, not a to-do list for the project.
    commit that changes the cron. PR-time validation is the real gate.
 8. **Bus factor: one.** The `maintainer_backup` field in the exemplar is empty, and it exists so that
    emptiness is visible. The implementation axis has a 90-day TTL and the exemplar's implementation
-   evidence is dated 2026-10-14, so that row's gate starts failing on **2027-01-12** if nobody
-   refreshes it. That is the design working as intended, and it also means a required check depends on
+   evidence is dated 2026-10-31, so that row's gate starts failing on **2027-01-30** if nobody
+   refreshes it. Verified by running the gate against the row aged 90 and 91 days rather than by
+   arithmetic. That is the design working as intended, and it also means a required check depends on
    one person.
 9. **Protocol names are free text.** Normalising to alphanumerics catches `TLS1.3` against `TLS 1.3`;
    it does not catch `TLSv1.3`, so two contradictory rows can still coexist under different spellings.
    The fix is a controlled vocabulary: an enum, or a committed protocol registry. Not here.
-10. **The suite asserts rejection, not the reason.** Each of the 32 cases checks that the gate exits
-    non-zero, not which rule fired, so an over-broad rule could satisfy several cases for the wrong
-    reason. The mutation report is a partial answer; asserting an expected message per case is the real
-    one.
+10. **The suite asserts rejection, not the reason.** Most of the 43 rejection cases check only that
+    the gate exits non-zero, not which rule fired, so an over-broad rule could satisfy several of them
+    for the wrong reason. The mutation report and the population split are partial answers; asserting
+    an expected message per case is the real one. This gap previously said "32 cases" while two
+    sections earlier the same file said 36, which is the defect this whole document is about, found in
+    its own text.
 
 ## On serialisation
 

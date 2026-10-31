@@ -335,6 +335,10 @@
                   "detail": {
                     "type": "string",
                     "maxLength": 600
+                  },
+                  "evidence": {
+                    "$ref": "#/$defs/evidence",
+                    "description": "Optional, and the gate reports each exposure that omits it. Version 2 set additionalProperties: false here with no evidence property at all, so the five exposures on the exemplar had nowhere to put any."
                   }
                 }
               }
@@ -493,6 +497,7 @@
       "required": [
         "source_kind",
         "independence",
+        "independence_basis",
         "source",
         "verified_on"
       ],
@@ -513,22 +518,29 @@
         "independence": {
           "enum": [
             "first-party",
+            "derivative",
             "third-party",
-            "independently-reproducible",
             "unknown"
           ],
-          "description": "A property of the evidence-TO-CLAIM pair, not of the document: the same RFC is third-party evidence that a mechanism is standardised and first-party evidence that its own authors' product ships it, which is why this sits on the evidence block rather than on a source registry. first-party: the author and the subject of the claim share an interest. third-party: the author is not the subject and did not take the subject's word for it. independently-reproducible: a reader holding the named artifacts can re-run it and get the same answer. unknown: cannot be established from the source. Worked cases in README.md.",
-          "$comment": "`unknown` was added after review on issue #46. The enum previously had no way to say 'not established', the field is required, and additionalProperties:false forbade attaching a reason, so an author who could not determine independence was obliged to assert one of three positive claims and forbidden from qualifying it. A required field with no escape hatch manufactures confidence."
+          "description": "The relation between the evidence's AUTHOR and the SUBJECT of the claim, and nothing else. Reproducibility is a separate field, because it is a property of method rather than of authorship. Apply the tests in order and take the first that matches: first-party, the author and the subject share an interest; derivative, the author is not the subject but the content restates the subject's own assertion rather than independently establishing it; third-party, the author is not the subject and did not take the subject's word for it; unknown, authorship or affiliation cannot be established from the source. The order is the precedence rule: version 1 had none, so a vendor's own pinned harness had two defensible values. Independence is a property of the evidence-to-claim PAIR, not of the document, so the same URL can carry different values on different rows. Worked cases in README.md.",
+          "$comment": "Reworked after the second round of review on issue #46. `unknown` was added in the first round because the enum could not say 'not established' while the field was required. `independently-reproducible` was REMOVED in this round and `derivative` added: the first conflated method with authorship, and without the second the authorship axis was not exhaustive."
         },
         "independence_basis": {
           "$ref": "#/$defs/nonEmpty",
           "maxLength": 300,
-          "description": "Required when independence is `unknown` or `independently-reproducible`. For `unknown`, why independence could not be established. For `independently-reproducible`, what a reader would re-run to get the same answer. Not required for first-party or third-party, which are cheap to check against the source URL; see README.md for the residual that leaves.",
-          "$comment": "The asymmetry is deliberate. `unknown` needs a reason so it cannot become a dump, and `independently-reproducible` is the strongest value in the enum while previously asserting reproducibility without naming anything to reproduce."
+          "description": "Required on every value: one sentence naming who authored the evidence and how that relates to the subject of this claim. For `unknown`, why it could not be established.",
+          "$comment": "Required on all four values after the second round of review on issue #46. The first round required it only on `unknown` and `independently-reproducible`, on the argument that the other two were cheap to check against the source URL. The argument was wrong on this repo's own evidence: the exemplar labelled RFC 10024 `third-party` for the claim that RFC 10024 is published, and a URL shows a host, not an authorship. Requiring the sentence is what surfaces the mislabel."
+        },
+        "reproduction": {
+          "$ref": "#/$defs/nonEmpty",
+          "maxLength": 300,
+          "description": "Optional. What a reader would re-run, against which pinned artifacts, to reach the same answer. Split out of the independence enum, where it was the value `independently-reproducible`.",
+          "$comment": "This field earns a row nothing. Nothing in validate.py re-runs anything, so the field is an instruction to a human reader and the gate treats it as census data. It is deliberately not a grade: in the first round the strongest-sounding enum value was the better-rewarded lie, because a fabricated row recovered a pass for one character of basis text and then printed as the most independent row in the repo. See gap 3 in README.md for the check that would make it mean something."
         },
         "source": {
           "type": "string",
-          "pattern": "^https://"
+          "pattern": "^https://",
+          "$comment": "The gate additionally REJECTS a source under a name RFC 2606 reserves for documentation (.test, .example, .invalid, .localhost, and example.com/.net/.org). That check is in validate.py rather than here, because expressing it as a pattern needs a negative lookahead that no reviewer can audit by eye; the cost is that a consumer validating against this schema alone does not get it."
         },
         "excerpt": {
           "type": "string",
@@ -555,26 +567,6 @@
           "then": {
             "required": [
               "verbatim"
-            ]
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "independence"
-            ],
-            "properties": {
-              "independence": {
-                "enum": [
-                  "unknown",
-                  "independently-reproducible"
-                ]
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "independence_basis"
             ]
           }
         }
