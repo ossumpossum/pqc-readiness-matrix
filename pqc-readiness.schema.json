@@ -551,8 +551,8 @@
             "yes",
             "no"
           ],
-          "description": "Required with an excerpt. `yes` means the excerpt is a quotation of the source with whitespace normalised, NOT that it is a byte substring of the served bytes. Version 1 called the field 'quote' and its own exemplar put an editorial paraphrase in it.",
-          "$comment": "Defined on 2026-10-31 because it was undefined and four of the exemplar's seven excerpts are quoted from hard-wrapped RFC and Markdown text, so they are genuine quotations that are not byte substrings. Normalisation is also what any excerpt check in gap 3 has to implement: a byte check would fail true rows whose source wraps, and would fail every HTML source, where the text a human quotes is split across markup. The normalised check works on all of them."
+          "description": "Required with an excerpt. `yes` means the excerpt is a quotation of the source's TEXT with whitespace normalised. It does NOT mean the excerpt is a byte substring of what the URL serves. Version 1 called the field 'quote' and its own exemplar put an editorial paraphrase in it.",
+          "$comment": "Defined on 2026-10-31 because it was undefined, then sharpened the same day because the first definition said 'whitespace normalised' and that was still not true of all nine excerpts on the exemplar. Measured: three are byte-identical to the source, three more match after whitespace normalisation of a hard-wrapped file, and three need the markup stripped first, because the sentence a reader quotes from an HTML page or a POD file is split across tags. All nine are quotations of their source's text; none of the last six is a byte substring. This is exactly why gap 3 is not closed by a one-line check: the extraction step is source-type dependent, so an excerpt checker needs a text extractor per source kind before it can compare anything, and a naive tag-strip regex eats OpenSSL's POD markup `C<?>` and reports a false mismatch."
         },
         "verified_on": {
           "$ref": "#/$defs/date"

@@ -57,10 +57,10 @@ STANDARDISATION_SETTLED = ("approved", "published", "superseded", "deprecated", 
 # including the zeros: ordering by frequency, or printing only what is present, makes a
 # census read as a ranking, which is the trust score this schema exists to refuse.
 INDEPENDENCE_VALUES = ("first-party", "derivative", "third-party", "unknown")
-# Names that cannot host a citation, because they are reserved for documentation, testing or
-# non-DNS resolution. This is the one part of gap 3 that can be a GATE rather than a warning:
-# it needs no network, so link rot and rate limits cannot make it flaky, and it is what kills
-# the fabricated row that motivated the #46 changes.
+# Hosts that cannot carry a citation, by NAME here and by ADDRESS in NOT_CITABLE_NETS and
+# _not_citable_address. This is the one part of gap 3 that can be a GATE rather than a
+# warning: it needs no network, so link rot and rate limits cannot make it flaky, and it is
+# what kills the fabricated row that motivated the #46 changes.
 #
 # The source is the IANA Special-Use Domain Names registry, NOT RFC 2606 alone, and that is
 # also the correct attribution. RFC 2606 section 2 reserves only the four top-level names;
@@ -74,8 +74,21 @@ RESERVED_TLDS = (
     "local",                                    # RFC 6762
     "onion",                                    # RFC 7686
     "alt",                                      # RFC 9476
-    "internal",                                 # ICANN Board resolution, not an IETF registry
+    "internal",  # ICANN Board Resolution 2024.07.29.06, 2024-07-29: reserved from
+                 # delegation in the root zone. Not in any IETF registry, which makes it the
+                 # one entry here a reader cannot check against IANA, hence the citation.
 )
+# Addresses that `is_global` reports as globally reachable and that still cannot host a
+# citation, plus one it only reports correctly on recent interpreters. Each measured.
+NOT_CITABLE_NETS = tuple(ipaddress.ip_network(n) for n in (
+    "192.88.99.0/24",   # deprecated 6to4 relay anycast, RFC 7526; is_global True
+    "5f00::/16",        # SRv6 SIDs; IANA IPv6 registry says Globally Reachable False
+    "3fff::/20",        # RFC 9637 IPv6 documentation space. is_global only knows this on
+                        # CPython 3.12.7+ and 3.13.1+, so it is listed to make the gate's
+                        # verdict independent of the contributor's patch level.
+    "2001:db8::/32",    # RFC 3849, listed for the same reason rather than trusting is_global
+    "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24",   # RFC 5737
+))
 RESERVED_DOMAINS = (
     "example.com", "example.net", "example.org",        # RFC 2606 s3, via RFC 6761
     "home.arpa", "service.arpa", "resolver.arpa",       # RFC 8375, RFC 9665, RFC 9462
@@ -107,49 +120,127 @@ def parse_date(s):
         return None
 
 
+def _why_not_citable(kind):
+    """The reason text. Split from the check because one message covered both cases and was
+    false for most of what triggered it: it said "reserved by RFC 2606", and RFC 2606
+    reserves no IP addresses and names none of .internal, .local, .onion, .alt or .arpa."""
+    if kind == "address":
+        return ("is not an address a reader can fetch: RFC 5737 and RFC 3849 as updated by "
+                "RFC 9637 reserve it for documentation, or it is loopback, link-local, "
+                "multicast, unspecified, CGNAT or RFC 1918, so it cannot be a citation")
+    return ("is reserved for documentation, testing or non-DNS resolution (IANA Special-Use "
+            "Domain Names registry, RFC 6761, which updates RFC 2606; plus ICANN Board "
+            "Resolution 2024.07.29.06 for .internal), so it cannot be a citation")
+
+
+def _ipv4_from_literal(host):
+    """Parse every IPv4 spelling inet_aton accepts, or None.
+
+    `ipaddress.ip_address()` accepts only the four-part decimal form, so each of
+    `3221225985`, `0300.0.2.1`, `0xC0000201` and `127.1` fell straight through the address
+    branch while resolving to 192.0.2.1 or 127.0.0.1 through gethostbyname. Measured: a row
+    with every source rewritten to `https://3221225985/report` validated with exit 0. curl,
+    glibc and the WHATWG URL parser all accept these, so a reader following the citation
+    would land on a documentation address.
+
+    1 to 4 parts; each part decimal, 0-prefixed octal or 0x-prefixed hex; the last part
+    covers the remaining octets.
+    """
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    nums = []
+    for p in parts:
+        if not p:
+            return None
+        try:
+            if p.lower().startswith("0x"):
+                n = int(p, 16)
+            elif p.startswith("0") and len(p) > 1:
+                n = int(p, 8)
+            else:
+                n = int(p, 10)
+        except ValueError:
+            return None
+        if n < 0:
+            return None
+        nums.append(n)
+    if any(n > 255 for n in nums[:-1]) or nums[-1] >= 256 ** (4 - (len(nums) - 1)):
+        return None
+    value = nums[-1]
+    for i, n in enumerate(nums[:-1]):
+        value += n << (8 * (3 - i))
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def _not_citable_address(host):
+    """The address, if `host` is an IP literal a reader could not fetch. Otherwise None."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = _ipv4_from_literal(host)
+    if ip is None:
+        return None
+    # `is_global` alone is not the test. It reports True for multicast, for 5f00::/16 and
+    # for 192.88.99.0/24, and it only knows 3fff::/20 on recent patch levels, so the
+    # explicit list carries what it misses and what it learned late.
+    if (not ip.is_global) or ip.is_multicast or ip.is_unspecified:
+        return ip
+    if any(ip in net for net in NOT_CITABLE_NETS):
+        return ip
+    return None
+
+
 def reserved_name(url):
     """The host of `url`, if it cannot host a real citation. Otherwise None.
 
-    The authority is parsed rather than pattern-matched, and each of these cases was a
-    measured evasion of an earlier version rather than a hypothetical:
+    Returns a (kind, host) pair so the caller can say WHY, because one message covering
+    both cases was false for most of what triggered it: it said "reserved by RFC 2606",
+    and RFC 2606 reserves no IP addresses and does not mention .internal, .local, .onion,
+    .alt or any .arpa name.
+
+    Every case handled here was a measured bypass of an earlier version of this function,
+    not a hypothetical:
 
     - `[^/?#:]+` kept the userinfo, so `https://ref@example.com/report` compared
-      "ref@example.com" against the list, matched nothing, and let a fully fabricated row
-      pass with exit 0. Percent-encoding got through the same way.
-    - An IP literal bypassed the name list entirely. Rewriting every source in the exemplar
-      to `https://192.0.2.1/report` validated with exit 0. RFC 5737 and RFC 3849 reserve
-      documentation ranges that are the exact IP analogue of example.com, and loopback,
-      link-local and RFC 1918 addresses are no more citable. `is_global` covers all of them
-      in one test, and it is the right test: a citation has to be reachable by a reader.
-    - `partition(":")` on a bracketed IPv6 authority yields a host of "[".
-    - A fullwidth U+FF45 in `example.com` passed while mapping to `example.com` under
-      UTS-46, so the name that would actually resolve WAS reserved. NFKC closes that.
+      "ref@example.com" against the list and matched nothing.
+    - `partition(":")` on a bracketed IPv6 authority yielded a host of "[".
+    - Percent-encoding, `%65xample.com`.
+    - An IP literal bypassed the name list entirely, `https://192.0.2.1/report`.
+    - Then the alternate IPv4 spellings bypassed the address branch, because
+      `ipaddress.ip_address()` accepts only one of them. See `_ipv4_from_literal`.
+    - A fullwidth U+FF45 in `example.com` mapped to `example.com` under IDNA. NFKC caught
+      that one and NOT U+3002 or U+FF61, which are label separators with no compatibility
+      decomposition to ".", so ToASCII does the normalising now.
     """
     m = re.match(r"^https://([^/?#]*)", str(url))
     if not m:
         return None
     authority = m.group(1).rpartition("@")[2]
-    # Bracketed IPv6 has to come off before any split on ":", or the port split eats it.
     bracket = re.match(r"^\[([^\]]*)\]", authority)
     host = bracket.group(1) if bracket else authority.partition(":")[0]
-    host = urllib.parse.unquote(host)
-    host = unicodedata.normalize("NFKC", host).strip().rstrip(".").lower()
+    host = urllib.parse.unquote(host).strip().rstrip(".").lower()
     if not host:
         return None
 
+    # IDNA ToASCII folds the label separators and the fullwidth forms. It rejects some
+    # hosts outright (over-long labels, disallowed characters), so a failure falls back to
+    # NFKC rather than letting the host through unnormalised.
     try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    else:
-        # Reachability is the point. A documentation, loopback, link-local or private
-        # address cannot be a source a reader can open.
-        return host if not ip.is_global else None
+        host = host.encode("idna").decode("ascii").rstrip(".").lower()
+    except (UnicodeError, ValueError):
+        host = unicodedata.normalize("NFKC", host).rstrip(".").lower()
 
+    ip = _not_citable_address(host)
+    if ip is not None:
+        return ("address", f"{host} ({ip})" if str(ip) != host else host)
     if host in RESERVED_DOMAINS or any(host.endswith("." + d) for d in RESERVED_DOMAINS):
-        return host
+        return ("name", host)
     if host.rsplit(".", 1)[-1] in RESERVED_TLDS:
-        return host
+        return ("name", host)
     return None
 
 
@@ -277,21 +368,22 @@ def check_entry(entry, today, top10):
                             f"so it fails: an unowned row cannot stay green forever]")
                 errs.append(msg)
 
-    # --- a citation cannot live under a name reserved for documentation ---
-    # RFC 2606. The fabricated row that motivated the #46 changes cited
-    # https://example.invalid/... on all four axes and passed with exit 0, and in the first
-    # round it recovered that pass for one character of basis text. This is a hard failure
-    # and it needs no network, which is what makes it a gate.
+    # --- a citation cannot live on a host a reader could not fetch ---
+    # The fabricated row that motivated the #46 changes cited https://example.invalid/... on
+    # all four axes and passed with exit 0, and in the first round it recovered that pass for
+    # one character of basis text. Two later versions of this check were each bypassed, by
+    # userinfo and then by alternate IPv4 literal spellings, so see reserved_name for what is
+    # measured rather than assumed. A hard failure, and it needs no network, which is what
+    # makes it a gate rather than a warning.
     for ev in walk_evidence(entry):
         bad = reserved_name(ev.get("source"))
         if bad:
-            errs.append(f"evidence source host {bad!r} is reserved by RFC 2606 for "
-                        f"documentation and testing, so it cannot be a citation")
+            errs.append(f"evidence source host {bad[1]!r} {_why_not_citable(bad[0])}")
     for doc in axes.get("standardisation", {}).get("documents", []):
         bad = reserved_name(doc.get("url"))
         if bad:
-            errs.append(f"document {doc.get('id')} url host {bad!r} is reserved by RFC 2606 "
-                        f"for documentation and testing")
+            errs.append(f"document {doc.get('id')} url host {bad[1]!r} "
+                        f"{_why_not_citable(bad[0])}")
 
     # --- NOT HERE: any warning keyed to WHICH independence value an author chose ---
     # Two were tried and both were removed, because each rewarded the lie it was meant to

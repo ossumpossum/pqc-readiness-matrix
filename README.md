@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          72 behaviours the gate must have
+tests/test_gate.py          86 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -143,10 +143,26 @@ round the strongest-sounding enum value was the better-rewarded lie.
    from the IANA Special-Use Domain Names registry (`.test`, `.example`, `.invalid`, `.localhost`,
    `.local`, `.onion`, `.alt`, `example.com/.net/.org`, `home.arpa`, `service.arpa`,
    `resolver.arpa`) plus `.internal`, which ICANN reserved by board resolution and which is in no
-   IETF registry; and any **IP literal that is not globally reachable**, which covers the RFC 5737
-   and RFC 3849 documentation ranges along with loopback, link-local and RFC 1918. The registry
+   IETF registry (specifically ICANN Board Resolution 2024.07.29.06, 2024-07-29, which reserves it
+   from delegation in the root zone); and any **IP literal a reader could not fetch**. The registry
    holds further entries this does not list, such as the `in-addr.arpa` reverse zones, so this is
-   the documentation-and-non-resolvable subset of it and not the whole thing. The attribution matters and
+   the documentation-and-non-resolvable subset of it and not the whole thing.
+   The address half took three attempts and the first two are worth recording, because both
+   failures were the same mistake. `ipaddress.ip_address()` accepts one spelling of an address and
+   `NFKC` folds one of the four Unicode label separators, so the check rejected the spellings that
+   came to mind and waved through the rest. Measured: `https://3221225985/`, `https://0300.0.2.1/`,
+   `https://0xC0000201/` and `https://127.1/` all passed while resolving through `gethostbyname`
+   to 192.0.2.1 or 127.0.0.1, and `https://example<U+3002>com/` passed while IDNA ToASCII maps it
+   to `example.com`. The host is now run through ToASCII, and every IPv4 spelling `inet_aton`
+   accepts is parsed, before the address is tested.
+   `is_global` is also not the whole test, and the README said it was. It reports **True** for
+   multicast (224.0.0.0/4 and ff00::/8 are in neither IANA special-purpose registry), for
+   `5f00::/16` which IANA marks Globally Reachable: False, and for `192.88.99.0/24`, the 6to4
+   relay anycast prefix deprecated by RFC 7526. And `3fff::/20`, the RFC 9637 IPv6 documentation
+   space, entered CPython's tables only in 3.12.7 and 3.13.1, so trusting `is_global` alone made
+   the gate's verdict on an IANA-registered documentation address depend on the contributor's
+   interpreter patch level. Those four are listed explicitly in `NOT_CITABLE_NETS`, which a gate
+   needs more than it needs brevity. The attribution matters and
    the first version of this check got it wrong by citing RFC 2606 alone: RFC 2606 s2 reserves only
    the four top-level names, its s3 reports that IANA "also currently has" the three second-level
    names reserved, its s4 records IANA agreeing to "the four top level domain name reservations
@@ -179,14 +195,16 @@ round the strongest-sounding enum value was the better-rewarded lie.
   two contradictory rows **that name the protocol the same way** cannot both pass. The protocol name is
   normalised to alphanumerics first, so `TLS1.3` and `TLS 1.3` collide as intended; see gap 9 for what
   that still does not catch.
-- A `source` or document `url` whose host cannot carry a real citation is rejected. That means the
-  documentation and non-resolvable names in the IANA Special-Use Domain Names registry, plus ICANN's
-  `.internal`, plus any IP literal that is not globally reachable. The fabricated row that motivated
-  the #46 changes cited `https://example.invalid/...` on every axis and validated with exit 0, and
-  three later evasions of this check were each measured rather than imagined: userinfo
-  (`https://ref@example.com/`), percent-encoding, and an IP literal in RFC 5737's documentation
-  range. The attribution matters too, and the first version got it wrong by citing RFC 2606 alone:
-  **RFC 6761 updates RFC 2606** and is what the registry cites. This needs no network, so link rot
+- A `source` or document `url` whose host cannot carry a real citation is rejected: the
+  documentation and non-resolvable names in the IANA Special-Use Domain Names registry, plus
+  ICANN's `.internal`, plus any IP literal a reader could not fetch. The fabricated row that
+  motivated the #46 changes cited `https://example.invalid/...` on every axis and validated with
+  exit 0, and **six later bypasses of this check were each measured rather than imagined**:
+  userinfo (`https://ref@example.com/`), percent-encoding, a bracketed-IPv6 parser bug, an IP
+  literal in RFC 5737's range, the alternate IPv4 spellings `inet_aton` accepts, and two Unicode
+  label separators that `NFKC` does not fold. Attribution matters too, and the first version got it
+  wrong by citing RFC 2606 alone: **RFC 6761 updates RFC 2606** and is what the registry cites, and
+  RFC 3849 is **updated by RFC 9637**. This needs no network, so link rot
   and rate limits cannot make it flaky, which is what lets it be
   a gate rather than a warning. The check lives in `validate.py` rather than in the schema because
   expressing it as a pattern needs a negative lookahead no reviewer can audit by eye; the cost is that
@@ -212,7 +230,7 @@ round the strongest-sounding enum value was the better-rewarded lie.
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 72 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 86 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
 measurable rather than asserted.
@@ -221,13 +239,13 @@ The report splits by what each case expects, because the aggregate was uninterpr
 expecting **rejection** can die when the exit code is forced to success, and a case expecting
 acceptance cannot, since the mutant agrees with it. Mixing the two made that mutant's number drift
 upward every time an acceptance case was added, which read as the suite weakening when it was the
-metric mixing populations. Measured 2026-10-31, against 59 rejection cases and 13 acceptance cases:
+metric mixing populations. Measured 2026-10-31, against 72 rejection cases and 14 acceptance cases:
 
 | Mutant | Rejection cases killed | Acceptance cases killed |
 |---|---|---|
-| semantic layer returns no findings | 34 of 59 | 2 of 13 |
-| schema layer yields no errors | 14 of 59 | 0 of 13 |
-| exit code always reports success | 57 of 59 | 0 of 13 |
+| semantic layer returns no findings | 47 of 72 | 2 of 14 |
+| schema layer yields no errors | 14 of 72 | 0 of 14 |
+| exit code always reports success | 70 of 72 | 0 of 14 |
 
 The two rejection cases that survive the exit-code mutant are the two that exit **2** through the
 gate's own `die()` path, so they do not depend on the mutated return at all. That is the correct
@@ -265,15 +283,16 @@ These are limits of what is here, not a to-do list for the project.
    **not a literal substring of the cited file at all**, because `NEWS.md` hard-wraps it and the bullet
    quoted did not name the mechanism the row is about. A different bullet did.
    `verbatim` is now **defined**, which it was not: `yes` means the excerpt is a quotation of the
-   source with whitespace normalised, and not that it is a byte substring of the served bytes. That
-   definition matters for whoever closes this gap, because a byte check is the wrong primitive. It
-   fails true rows whose source is hard-wrapped, which is most RFC and Markdown text, and it fails
-   every HTML source, where the sentence a human quotes is split across markup. Four of this row's
-   seven excerpts are in that position. A whitespace-normalised check works on all of them, and the
-   reason an excerpt check still cannot be a gate is network dependence rather than anything about the
-   source format. The exemplar's implementation evidence cites raw source files at pinned tags, where
-   the excerpt is literal as well as normalised; that was checked against the fetched bytes in the
-   commit that introduced it, which is not the same as being checked on every run.
+   source's TEXT with whitespace normalised, and not that it is a byte substring of what the URL
+   serves. That definition is the useful part of this gap, because it says what a checker has to
+   do. Measured across this row's nine `verbatim: yes` excerpts: three are byte-identical to the
+   source, three more match after normalising a hard-wrapped file, and three need the markup
+   stripped first, because the sentence a reader quotes from an HTML page or an OpenSSL POD file is
+   split across tags. So a byte check is the wrong primitive: it would fail six of nine true rows
+   here. The extraction step is **source-type dependent**, which is the real cost of closing this
+   gap and is why it is not a one-line check; a naive tag-stripping regex also eats POD's `C<?>`
+   markup and reports a false mismatch, which happened while measuring the above. The remaining
+   reason an excerpt check cannot be a GATE is network dependence, and that stands on its own.
 4. **The review burden is real.** One row per mechanism class means up to 60 rows for 30 protocols,
    600 or more evidence blocks, and with these TTLs roughly 540 axis re-verifications a year. That is
    not sustainable by one person. Six to eight rows is the sane starting point: TLS twice, SSH twice,
@@ -306,7 +325,7 @@ These are limits of what is here, not a to-do list for the project.
 9. **Protocol names are free text.** Normalising to alphanumerics catches `TLS1.3` against `TLS 1.3`;
    it does not catch `TLSv1.3`, so two contradictory rows can still coexist under different spellings.
    The fix is a controlled vocabulary: an enum, or a committed protocol registry. Not here.
-10. **The suite asserts rejection, not the reason.** Most of the 59 rejection cases check only that
+10. **The suite asserts rejection, not the reason.** Most of the 72 rejection cases check only that
     the gate exits non-zero, not which rule fired, so an over-broad rule could satisfy several of them
     for the wrong reason. The mutation report and the population split are partial answers; asserting
     an expected message per case is the real one. This gap previously said "32 cases" while two

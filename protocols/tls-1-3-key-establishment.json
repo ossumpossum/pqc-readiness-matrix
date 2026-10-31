@@ -77,7 +77,7 @@
       "source_kind": "source-code",
       "independence": "first-party",
       "independence_basis": "The OpenSSL project authored this, and the claim is about the OpenSSL default, so the project's own tree at a pinned tag is the primary record of that default rather than a report about it.",
-      "reproduction": "Read TLS_DEFAULT_GROUP_LIST in ssl/t1_lib.c at tag openssl-3.5.0, or build that tag and run `openssl list -tls-groups`.",
+      "reproduction": "Read TLS_DEFAULT_GROUP_LIST in ssl/t1_lib.c at tag openssl-3.5.0. Do not use `openssl list -tls-groups`: it reports all implemented groups, not the default.",
       "source": "https://raw.githubusercontent.com/openssl/openssl/refs/tags/openssl-3.5.0/ssl/t1_lib.c",
       "excerpt": "\"?*X25519MLKEM768 / ?*X25519:?secp256r1 / ?X448:?secp384r1:?secp521r1 / ?ffdhe2048:?ffdhe3072\"",
       "verbatim": "yes",
@@ -95,7 +95,7 @@
       "source_kind": "source-code",
       "independence": "first-party",
       "independence_basis": "The Go team authored this, and the claim is about the Go default, so the pinned source tree is the primary record of that default rather than a report about it.",
-      "reproduction": "Read defaultCurvePreferences in src/crypto/tls/defaults.go at tag go1.24.0: X25519MLKEM768 is returned first unless GODEBUG tlsmlkem=0.",
+      "reproduction": "Read defaultCurvePreferences in src/crypto/tls/defaults.go at tag go1.24.0, and common.go:1185 for the FIPS branch that bypasses it.",
       "source": "https://raw.githubusercontent.com/golang/go/refs/tags/go1.24.0/src/crypto/tls/defaults.go",
       "excerpt": "return []CurveID{X25519MLKEM768, X25519, CurveP256, CurveP384, CurveP521}",
       "verbatim": "yes",
@@ -158,6 +158,33 @@
       "reproduction": "Read src/crypto/tls/defaults.go at tag go1.24.0, or run a client under GODEBUG=tlsmlkem=0 and observe the offered groups.",
       "source": "https://raw.githubusercontent.com/golang/go/refs/tags/go1.24.0/src/crypto/tls/defaults.go",
       "excerpt": "if tlsmlkem.Value() == \"0\" {",
+      "verbatim": "yes",
+      "verified_on": "2026-10-31"
+     }
+    },
+    {
+     "class": "other",
+     "detail": "Go under FIPS mode offers no hybrid group at all. common.go:1185 branches on fips140tls.Required() and clones defaultCurvePreferencesFIPS, which is {CurveP256, CurveP384}, so defaultCurvePreferences is never called and X25519MLKEM768 is not offered. This fires on a build setting rather than on anything an operator does at runtime, and it is the condition most likely to apply to a regulated deployment.",
+     "evidence": {
+      "source_kind": "source-code",
+      "independence": "first-party",
+      "independence_basis": "The Go team's own source at a pinned tag, which is the primary record of the branch this exposure describes.",
+      "reproduction": "Read curvePreferences in src/crypto/tls/common.go at tag go1.24.0, or build with GOFIPS140 and observe the offered groups.",
+      "source": "https://raw.githubusercontent.com/golang/go/refs/tags/go1.24.0/src/crypto/tls/common.go",
+      "excerpt": "curvePreferences = slices.Clone(defaultCurvePreferencesFIPS)",
+      "verbatim": "yes",
+      "verified_on": "2026-10-31"
+     }
+    },
+    {
+     "class": "other",
+     "detail": "OpenSSL's default group list degrades silently when ML-KEM is absent. Every entry in TLS_DEFAULT_GROUP_LIST carries the `?` prefix, which the SSL_CTX_set1_curves manual defines as ignored if an implementation is missing, and 3.5.0 ships a `no-ml-kem` build option. A build without it negotiates classical with no error, so default-on is a property of a build rather than of a version number.",
+     "evidence": {
+      "source_kind": "specification",
+      "independence": "first-party",
+      "independence_basis": "The OpenSSL project's own manual page at a pinned tag, defining the prefix syntax used by the default list this row cites.",
+      "source": "https://raw.githubusercontent.com/openssl/openssl/refs/tags/openssl-3.5.0/doc/man3/SSL_CTX_set1_curves.pod",
+      "excerpt": "If a group name is preceded with the C<?> character, it will be ignored if an implementation is missing.",
       "verbatim": "yes",
       "verified_on": "2026-10-31"
      }

@@ -63,9 +63,9 @@ def _all_evidence(node):
             yield from _all_evidence(v)
 
 
-# Fixtures cite a host that is deliberately NOT one RFC 2606 reserves, because the gate now
-# rejects those outright and a fixture under example.test would fail for a reason unrelated
-# to the case under test. Nothing fetches it. The reserved names get their own cases below.
+# Fixtures cite a host that is deliberately NOT reserved and NOT an address, because the gate
+# rejects both and a fixture under example.test would fail for a reason unrelated to the case
+# under test. Nothing fetches it. The reserved hosts get their own cases below.
 FIXTURE_HOST = "https://sources.pqcm-fixture.org"
 
 
@@ -262,7 +262,7 @@ def provenance_maximal_without_basis(e):
     fabricated row graded as the fresher of the two. `independently-reproducible` now costs a
     sentence naming what to re-run.
 
-    What this case does NOT prove: the same row under a host RFC 2606 does not reserve, with
+    What this case does NOT prove: the same row under a host the gate cannot rule out, with
     a plausible basis string, still passes, because nothing fetches `source`. That is gap 3,
     it is tested below as `plausible-host-fabrication-still-passes`, and it is the only thing
     that would turn provenance into verification.
@@ -276,11 +276,14 @@ def provenance_maximal_without_basis(e):
 
 
 def reserved_source_host(host):
-    """RFC 2606 reserves these for documentation, so a citation cannot live under one.
+    """A host that cannot carry a citation, by name or by address.
 
     The fabricated row that drove the whole #46 change cited https://example.invalid/... on
     every axis and passed with exit 0. This is the one part of gap 3 that can be a gate
     rather than a warning: no network, so link rot and rate limits cannot make it flaky.
+    Names come from the IANA Special-Use Domain Names registry (RFC 6761, which updates RFC
+    2606) plus ICANN Resolution 2024.07.29.06 for .internal; addresses are anything a reader
+    could not fetch.
     """
     def fn(e):
         for ev in _all_evidence(e):
@@ -294,8 +297,8 @@ def reserved_authority(host):
     Reproduced against dedcbd1 before this existed: the host was taken as `[^/?#:]+`, which
     keeps userinfo, so `https://ref@example.com/report` compared "ref@example.com" against
     the reserved list, matched nothing, and a fully fabricated row passed with exit 0 under a
-    name RFC 2606 covers. The README called the check a gate on "a source under a reserved
-    name" while four families evaded it.
+    name the registry covers. The README called the check a gate on "a source under a
+    reserved name" while four families evaded it.
     """
     def fn(e):
         for ev in _all_evidence(e):
@@ -402,6 +405,28 @@ MUST_FAIL = {
     # U+FF45 FULLWIDTH LATIN SMALL LETTER E. Maps to example.com under UTS-46, so the name
     # that would actually resolve is reserved; NFKC normalisation is what catches it.
     "reserved-host-fullwidth-idna": reserved_authority("\uff45xample.com"),
+    # Alternate IPv4 spellings. ipaddress.ip_address() accepts only the four-part decimal
+    # form, so each of these fell through the address branch while resolving to a
+    # documentation or loopback address through gethostbyname. Measured 2026-10-31: a row
+    # with every source rewritten to https://3221225985/report validated with exit 0.
+    "reserved-host-ipv4-decimal-integer": reserved_authority("3221225985"),
+    "reserved-host-ipv4-octal": reserved_authority("0300.0.2.1"),
+    "reserved-host-ipv4-hex": reserved_authority("0xC0000201"),
+    "reserved-host-ipv4-short-form-loopback": reserved_authority("127.1"),
+    # Label separators with no compatibility decomposition to ".", so NFKC left them alone
+    # while IDNA ToASCII resolves both to example.com.
+    "reserved-host-ideographic-full-stop": reserved_authority("example\u3002com"),
+    "reserved-host-halfwidth-ideographic-stop": reserved_authority("example\uff61com"),
+    # Addresses is_global calls globally reachable that still cannot host a citation.
+    "reserved-host-multicast": reserved_authority("224.0.0.251"),
+    "reserved-host-multicast-ipv6": reserved_authority("[ff02::1]"),
+    "reserved-host-srv6-sid-block": reserved_authority("[5f00::1]"),
+    "reserved-host-6to4-relay-anycast": reserved_authority("192.88.99.1"),
+    # RFC 9637 IPv6 documentation space. is_global only knows it on CPython 3.12.7+ and
+    # 3.13.1+, so it is listed explicitly and this case pins the behaviour.
+    "reserved-host-rfc9637-documentation-ipv6": reserved_authority("[3fff::1]"),
+    "reserved-host-cgnat": reserved_authority("100.64.0.1"),
+    "reserved-host-unspecified": reserved_authority("0.0.0.0"),
     "removed-enum-value-independently-reproducible": removed_enum_value,
     "empty-reproduction-string": empty_reproduction,
 }
@@ -656,8 +681,12 @@ def main():
             ev["independence_basis"] = "Affiliation not stated in the source."
         (d / (e["slug"] + ".json")).write_text(json.dumps(e))
         rc, out = run_gate(d)
+        # Count derived from the row, not hardcoded. Adding two exposures to the exemplar
+        # broke this case and `reproduction-is-optional-and-earns-nothing` at the same time,
+        # which is the positional brittleness that `doc_by_id` fixed one field over.
+        n = len(list(_all_evidence(e)))
         results.append(("unknown-only-evidence-is-reported", "accept, provenance shown",
-                        rc == 0 and "unknown:7" in out and "/unknown" in out, out))
+                        rc == 0 and f"unknown:{n}" in out and "/unknown" in out, out))
 
     # --- NO label pattern buys a cleaner run. This is @leprecha1's third point, measured. ---
     # Two earlier attempts both failed this. 40f737f warned when an axis rested only on weak
@@ -687,7 +716,7 @@ def main():
     # --- and the fabrication that the gate genuinely CANNOT catch, asserted as passing ---
     # Stated as a test so the README's gap 3 cannot quietly become a claim that it is closed.
     # Every block third-party with a one-word basis, every excerpt invented and marked
-    # verbatim, dated today, under a host RFC 2606 does not reserve: this passes, and the
+    # verbatim, dated today, under a host the gate cannot rule out: this passes, and the
     # only thing that would stop it is fetching `source` and checking `excerpt` against it.
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
@@ -719,6 +748,18 @@ def main():
         results.append(("every-unevidenced-exposure-is-reported", "accept, one warn each",
                         rc == 0 and n == len(e["axes"]["failure_mode"]["known_exposures"]),
                         f"warned {n} times\n" + out))
+
+    # --- an internationalised domain in punycode is still accepted ---
+    # The IDNA normalisation runs ToASCII over every host, so the negative control matters:
+    # an over-eager version would reject legitimate punycode citations.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        for ev in _all_evidence(e):
+            ev["source"] = "https://xn--e1afmkfd.xn--p1ai/report"
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("punycode-idn-host-is-accepted", "accept", rc == 0, out))
 
     # --- a globally reachable host, including a bare IP, is still accepted ---
     # The IP rule rejects "not globally reachable", so the negative control matters: an
@@ -763,10 +804,11 @@ def main():
             ev["reproduction"] = "Re-run the published harness at the pinned tag."
         (d / (full["slug"] + ".json")).write_text(json.dumps(full))
         rc_b, out_b = run_gate(d)
+        n = len(list(_all_evidence(full)))
         results.append(("reproduction-is-optional-and-earns-nothing", "accept both, same warns",
                         rc_a == 0 and rc_b == 0
                         and out_a.count("warn:") == out_b.count("warn:")
-                        and "repro=0/" in out_a and "repro=7/7" in out_b,
+                        and "repro=0/" in out_a and f"repro={n}/{n}" in out_b,
                         out_a + out_b))
 
     # --- a FAILED pair cannot speak for a claim that the pair interoperates ---
