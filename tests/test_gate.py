@@ -272,6 +272,21 @@ def reserved_source_host(host):
     return fn
 
 
+def reserved_authority(host):
+    """Reserved names must be caught through userinfo and percent-encoding.
+
+    Reproduced against dedcbd1 before this existed: the host was taken as `[^/?#:]+`, which
+    keeps userinfo, so `https://ref@example.com/report` compared "ref@example.com" against
+    the reserved list, matched nothing, and a fully fabricated row passed with exit 0 under a
+    name RFC 2606 covers. The README called the check a gate on "a source under a reserved
+    name" while four families evaded it.
+    """
+    def fn(e):
+        for ev in _all_evidence(e):
+            ev["source"] = f"https://{host}/report"
+    return fn
+
+
 def reserved_document_url(e):
     """The same rule has to cover `documents[].url`, which is not an evidence block and so
     is not reached by the evidence walk. Asserted because it was added separately."""
@@ -349,6 +364,13 @@ MUST_FAIL = {
     "reserved-source-host-localhost": reserved_source_host("localhost"),
     "reserved-source-host-example-com": reserved_source_host("www.example.com"),
     "reserved-document-url": reserved_document_url,
+    "reserved-host-behind-userinfo": reserved_authority("ref@example.com"),
+    "reserved-host-behind-userinfo-and-password": reserved_authority("a:b@www.example.org"),
+    "reserved-host-percent-encoded": reserved_authority("%65xample.com"),
+    "reserved-host-icann-internal": reserved_authority("evidence.internal"),
+    "reserved-host-mdns-local": reserved_authority("sources.local"),
+    "reserved-host-onion": reserved_authority("abc.onion"),
+    "reserved-host-home-arpa": reserved_authority("host.home.arpa"),
     "removed-enum-value-independently-reproducible": removed_enum_value,
     "empty-reproduction-string": empty_reproduction,
 }
@@ -753,6 +775,21 @@ def main():
         rc, out = run_gate(d)
         results.append(("failing-rows-print-independence-counts", "reject, with counts",
                         rc != 0 and "FAIL" in out and "indep=" in out, out))
+
+    # --- a FAILING row also prints the per-axis provenance ---
+    # The README claims the label is printed beside the status it supports "on every row, pass
+    # or fail". It was built inside the pass branch only, so a failing row printed the census
+    # and no provenance at all: the branch where a reader needs it most, and the same defect as
+    # the census one commit earlier, in the line added to fix that one. Reproduced 2026-10-31.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = mutate(bogus_related)
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        fail_line = next((l for l in out.splitlines() if l.startswith("FAIL")), "")
+        results.append(("failing-rows-print-axis-provenance", "reject, with provenance",
+                        rc != 0 and "implem=default-on/first-party" in fail_line
+                        and "oldest_evidence=" in fail_line, out))
 
     # --- the manifest must fail CLOSED, not open ---
     # Deleting top10.json previously made every related_owasp_entries value pass: a row citing

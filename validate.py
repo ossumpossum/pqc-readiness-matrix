@@ -28,6 +28,7 @@ import json
 import re
 import pathlib
 import sys
+import urllib.parse
 
 TTL_DAYS = {
     "standardisation": 365,
@@ -54,13 +55,29 @@ STANDARDISATION_SETTLED = ("approved", "published", "superseded", "deprecated", 
 # including the zeros: ordering by frequency, or printing only what is present, makes a
 # census read as a ranking, which is the trust score this schema exists to refuse.
 INDEPENDENCE_VALUES = ("first-party", "derivative", "third-party", "unknown")
-# RFC 2606 reserves these names for documentation and testing, so a citation cannot live
-# under one. Section 2 reserves the TLDs, section 3 the three second-level domains. This is
-# the one part of gap 3 that can be a GATE rather than a warning: it needs no network, so
-# link rot and rate limits cannot make it flaky, and it is what kills the fabricated row
-# that motivated this change.
-RESERVED_TLDS = ("test", "example", "invalid", "localhost")
-RESERVED_DOMAINS = ("example.com", "example.net", "example.org")
+# Names that cannot host a citation, because they are reserved for documentation, testing or
+# non-DNS resolution. This is the one part of gap 3 that can be a GATE rather than a warning:
+# it needs no network, so link rot and rate limits cannot make it flaky, and it is what kills
+# the fabricated row that motivated the #46 changes.
+#
+# The source is the IANA Special-Use Domain Names registry, NOT RFC 2606 alone, and that is
+# also the correct attribution. RFC 2606 section 2 reserves only the four top-level names;
+# its section 3 reports that IANA "also currently has" the three second-level names reserved,
+# and its section 4 records IANA agreeing to "the four top level domain name reservations
+# specified in this document". RFC 6761 UPDATES RFC 2606 and the registry references 6761 for
+# all seven. Citing 2606 bare, as the first version of this check did, is the
+# outdated-citation pattern this repo exists to complain about.
+RESERVED_TLDS = (
+    "test", "example", "invalid", "localhost",  # RFC 2606 s2, via RFC 6761
+    "local",                                    # RFC 6762
+    "onion",                                    # RFC 7686
+    "alt",                                      # RFC 9476
+    "internal",                                 # ICANN Board resolution, not an IETF registry
+)
+RESERVED_DOMAINS = (
+    "example.com", "example.net", "example.org",        # RFC 2606 s3, via RFC 6761
+    "home.arpa", "service.arpa", "resolver.arpa",       # RFC 8375, RFC 9665, RFC 9462
+)
 
 
 def die(msg):
@@ -89,11 +106,22 @@ def parse_date(s):
 
 
 def reserved_name(url):
-    """The host of `url`, if RFC 2606 reserves it for documentation. Otherwise None."""
-    m = re.match(r"^https://([^/?#:]+)", str(url))
+    """The host of `url`, if it is a name reserved for documentation. Otherwise None.
+
+    The authority is parsed rather than pattern-matched. The first version took the host as
+    `[^/?#:]+`, which keeps userinfo, so `https://ref@example.com/report` compared
+    "ref@example.com" against the reserved list, matched nothing, and let a fully fabricated
+    row pass with exit 0. Percent-encoding evaded it the same way, so the host is unquoted
+    before comparison.
+    """
+    m = re.match(r"^https://([^/?#]*)", str(url))
     if not m:
         return None
-    host = m.group(1).rstrip(".").lower()
+    # authority = [userinfo "@"] host [":" port]; take the host.
+    host = m.group(1).rpartition("@")[2].partition(":")[0]
+    host = urllib.parse.unquote(host).strip().rstrip(".").lower()
+    if not host:
+        return None
     if host in RESERVED_DOMAINS or any(host.endswith("." + d) for d in RESERVED_DOMAINS):
         return host
     if host.rsplit(".", 1)[-1] in RESERVED_TLDS:
@@ -435,21 +463,27 @@ def main():
         # the thing this schema exists to refuse and the per-axis picture is in the warnings.
         mix = independence_census(list(walk_evidence(entry)))
 
+        # Built BEFORE the branch, because the README claims the provenance is printed next to
+        # the status it supports "on every row, pass or fail" and it was in the pass branch
+        # only. A failing row printed the census and no provenance at all, which is the branch
+        # where a reader needs it most: the same defect as the census one commit earlier, in
+        # the line added to fix that one.
+        ages = []
+        for axis in TTL_DAYS:
+            d = axis_evidence_dates(entry.get("axes", {}).get(axis, {}))
+            if d:
+                ages.append((today - min(d)).days)
+        summary = " ".join(
+            f"{a[:6]}={entry.get('axes', {}).get(a, {}).get('status', '?')}"
+            f"/{axis_provenance(a, entry.get('axes', {}).get(a))}" for a in TTL_DAYS)
+        age = f"{max(ages)}d" if ages else "n/a"
+
         if errs:
             failed += 1
-            print(f"FAIL {f.name}  indep={mix}")
+            print(f"FAIL {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
             for e in errs:
                 print(f"    {e}")
         else:
-            ages = []
-            for axis in TTL_DAYS:
-                d = axis_evidence_dates(entry.get("axes", {}).get(axis, {}))
-                if d:
-                    ages.append((today - min(d)).days)
-            summary = " ".join(
-                f"{a[:6]}={entry.get('axes', {}).get(a, {}).get('status', '?')}"
-                f"/{axis_provenance(a, entry.get('axes', {}).get(a))}" for a in TTL_DAYS)
-            age = f"{max(ages)}d" if ages else "n/a"
             print(f"ok   {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
         for w in warns:
             print(f"     warn: {w}")

@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          55 behaviours the gate must have
+tests/test_gate.py          63 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -87,9 +87,14 @@ own optional `reproduction` field and the enum is now a single axis.
 was not exhaustive without it: a blog restating a vendor's release notes is not the subject, so it is
 not first-party, and it took the subject's word for it, so it is not third-party. Under the previous
 enum it had no correct value, which is how a required field gets a wrong answer entered sincerely.
-Note where this puts a CVE record: most are authored by the affected vendor's own CNA, so `third-party`
-is wrong for the common case. The first round's table gave "a CVE analysis" as a typical third-party
-case and that was simply an error.
+Note where this puts a CVE **record**, as distinct from a third-party analysis **of** one. The CVE
+Program's own rules put the supplier first in line but hedge it: the CNA Operational Rules say the CNA
+with the most appropriate scope is "often, but not always, the Supplier of the Product in question"
+(s3.1). Measured across 10,000 CVE records published August and September 2026, 44.2% were assigned by
+a named non-supplier CNA, so `third-party` is not wrong by default across the corpus. It IS wrong for
+the population this matrix covers, where the supplier normally is the assigner: OpenSSL and the Go
+project are both CNAs for their own products. The first round's table gave "a CVE analysis" as a
+typical third-party case without that distinction, and that was an error.
 
 **`independence_basis` is required on every value.** One sentence naming who authored the evidence and
 how that relates to this claim. The first round required it only on `unknown` and
@@ -134,9 +139,17 @@ round the strongest-sounding enum value was the better-rewarded lie.
    invented excerpts marked `verbatim: yes`, dated today, under a host nobody can check offline,
    passes. It is committed as a test case named `plausible-host-fabrication-still-passes` so this
    cannot quietly become a claim that it does not. What **is** now rejected is a source under a name
-   RFC 2606 reserves for documentation: `.test`, `.example`, `.invalid`, `.localhost`, and
-   `example.com/.net/.org`. That kills the specific fabricated row that motivated these changes, it
-   needs no network, and it is the only part of gap 3 that can be a gate rather than a warning.
+   is reserved for documentation, testing or non-DNS resolution. The list is the IANA Special-Use
+   Domain Names registry: `.test`, `.example`, `.invalid`, `.localhost`, `.local`, `.onion`, `.alt`,
+   `example.com/.net/.org`, `home.arpa`, `service.arpa`, `resolver.arpa`, plus `.internal`, which
+   ICANN reserved by board resolution and which is in no IETF registry. The attribution matters and
+   the first version of this check got it wrong by citing RFC 2606 alone: RFC 2606 s2 reserves only
+   the four top-level names, its s3 reports that IANA "also currently has" the three second-level
+   names reserved, its s4 records IANA agreeing to "the four top level domain name reservations
+   specified in this document", and **RFC 6761 updates RFC 2606** and is what the registry cites for
+   all seven. Citing 2606 bare is the outdated-citation pattern this repo complains about.
+   This kills the specific fabricated row that motivated these changes, it needs no network, and it is
+   the only part of gap 3 that can be a gate rather than a warning.
 2. **`unknown` is not an exemption.** It describes the evidence, not a floor status, so it does not
    relax a TTL and does not excuse a status from needing evidence.
 3. **Provenance is not validity.** This schema records where a claim came from, which is cheap, and
@@ -190,7 +203,7 @@ round the strongest-sounding enum value was the better-rewarded lie.
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 55 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 63 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
 measurable rather than asserted.
@@ -199,13 +212,13 @@ The report splits by what each case expects, because the aggregate was uninterpr
 expecting **rejection** can die when the exit code is forced to success, and a case expecting
 acceptance cannot, since the mutant agrees with it. Mixing the two made that mutant's number drift
 upward every time an acceptance case was added, which read as the suite weakening when it was the
-metric mixing populations. Measured 2026-10-31, against 43 rejection cases and 12 acceptance cases:
+metric mixing populations. Measured 2026-10-31, against 51 rejection cases and 12 acceptance cases:
 
 | Mutant | Rejection cases killed | Acceptance cases killed |
 |---|---|---|
-| semantic layer returns no findings | 18 of 43 | 2 of 12 |
-| schema layer yields no errors | 14 of 43 | 0 of 12 |
-| exit code always reports success | 41 of 43 | 0 of 12 |
+| semantic layer returns no findings | 26 of 51 | 2 of 12 |
+| schema layer yields no errors | 14 of 51 | 0 of 12 |
+| exit code always reports success | 49 of 51 | 0 of 12 |
 
 The two rejection cases that survive the exit-code mutant are the two that exit **2** through the
 gate's own `die()` path, so they do not depend on the mutated return at all. That is the correct
@@ -215,7 +228,8 @@ result rather than a hole.
 
 These are limits of what is here, not a to-do list for the project.
 
-1. **No renderer, and this is the most important gap.** Thirty JSON files are unreadable to a defender.
+1. **No renderer, and this is the most important gap.** A directory of JSON files is unreadable to a
+   defender, and at the six to eight rows this should start with it is already unreadable.
    Without a generator someone will hand-maintain a Markdown table and the staleness problem reappears
    downstream in an artifact nothing validates. It is a small generator over `protocols/*.json` and it
    is next, but it is not in this drop.
@@ -226,7 +240,7 @@ These are limits of what is here, not a to-do list for the project.
    asserting the revision is current and the state is not `replaced`. The exemplar's citations were
    checked by hand on 2026-10-30; doing it by hand is the gap.
 3. **No link checking and no content verification.** `source` must be `https://` and must not sit
-   under a name RFC 2606 reserves, and that is the whole of what is checked. Nothing fetches it,
+   under a reserved name, and that is the whole of what is checked. Nothing fetches it,
    snapshots it, or confirms that `excerpt` appears there, so `verbatim: yes` remains an author's
    assertion. Two distinct failures of that field have now been found in this repository's own single
    row: two excerpts truncated immediately before a clause that qualified the claim, and one that was
@@ -259,8 +273,10 @@ These are limits of what is here, not a to-do list for the project.
    workflow's age, so the practical limitation is that on a quiet repository the staleness check can
    silently stop, which is exactly when rows are going stale. Re-enabling needs a UI or API action, or a
    commit that changes the cron. PR-time validation is the real gate.
-8. **Bus factor: one.** The `maintainer_backup` field in the exemplar is empty, and it exists so that
-   emptiness is visible. The implementation axis has a 90-day TTL and the exemplar's implementation
+8. **Bus factor: one.** There is no `maintainer_backup` on the exemplar at all. The previous wording
+   here, and in the 2026-10-30 comment on #46, said the field "is empty, and it exists so that
+   emptiness is visible"; the field is absent from the row, so nothing was visible and the sentence
+   described a mechanism that was not there. The implementation axis has a 90-day TTL and the exemplar's implementation
    evidence is dated 2026-10-31, so that row's gate starts failing on **2027-01-30** if nobody
    refreshes it. Verified by running the gate against the row aged 90 and 91 days rather than by
    arithmetic. That is the design working as intended, and it also means a required check depends on
@@ -268,7 +284,7 @@ These are limits of what is here, not a to-do list for the project.
 9. **Protocol names are free text.** Normalising to alphanumerics catches `TLS1.3` against `TLS 1.3`;
    it does not catch `TLSv1.3`, so two contradictory rows can still coexist under different spellings.
    The fix is a controlled vocabulary: an enum, or a committed protocol registry. Not here.
-10. **The suite asserts rejection, not the reason.** Most of the 43 rejection cases check only that
+10. **The suite asserts rejection, not the reason.** Most of the 51 rejection cases check only that
     the gate exits non-zero, not which rule fired, so an over-broad rule could satisfy several of them
     for the wrong reason. The mutation report and the population split are partial answers; asserting
     an expected message per case is the real one. This gap previously said "32 cases" while two
