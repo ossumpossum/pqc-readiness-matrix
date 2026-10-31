@@ -608,8 +608,8 @@ def main():
 
     # --- NO label pattern buys a cleaner run. This is @leprecha1's third point, measured. ---
     # Two earlier attempts both failed this. 40f737f warned when an axis rested only on weak
-    # evidence, so the honest exemplar warned twice and an all-`third-party` fabrication of
-    # the same row warned zero times. A uniformity warning fixed that case and immediately
+    # evidence, so the honest exemplar as shipped earned one warning and an all-`third-party`
+    # fabrication of the same row earned none. A uniformity warning fixed that case and immediately
     # rewarded a fabricated MIX. The invariant below is what rules the whole family out:
     # relabelling every block, in any direction, must not change how many warnings a row
     # earns. Only absences warn, and relabelling cannot fill an absence.

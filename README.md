@@ -103,9 +103,10 @@ mislabel, and both are corrected in this commit.
 a grading rule were written and both were removed, because each rewarded the lie it was meant to
 expose:
 
-1. The first warned when an axis rested only on weak evidence. Measured: the honest exemplar warned
-   twice, and a fabrication of the same row with `third-party` typed over every block warned zero
-   times. The honest row looked worse than the invented one.
+1. The first warned when an axis rested only on weak evidence. Measured against commit 40f737f:
+   the honest exemplar as shipped earned ONE warning, the same row with `third-party` typed over
+   every block earned NONE, and typing the strongest value over every block also earned none. The
+   honest row looked worse than either fabrication of it.
 2. The second added a warning for a *uniform* provenance answer across all four axes, which fixed
    that case and immediately rewarded a fabricated **mix** instead.
 
