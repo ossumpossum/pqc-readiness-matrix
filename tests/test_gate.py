@@ -387,6 +387,21 @@ MUST_FAIL = {
     "reserved-host-mdns-local": reserved_authority("sources.local"),
     "reserved-host-onion": reserved_authority("abc.onion"),
     "reserved-host-home-arpa": reserved_authority("host.home.arpa"),
+    # An IP literal bypassed the name list entirely. Rewriting every source in the exemplar
+    # to https://192.0.2.1/report validated with exit 0, which revived the whole fabricated
+    # row attack: RFC 5737 and RFC 3849 reserve documentation ranges that are the IP analogue
+    # of example.com. Reproduced 2026-10-31.
+    "reserved-host-rfc5737-documentation-ipv4": reserved_authority("192.0.2.1"),
+    "reserved-host-rfc5737-second-range": reserved_authority("198.51.100.7"),
+    "reserved-host-rfc3849-documentation-ipv6": reserved_authority("[2001:db8::1]"),
+    "reserved-host-loopback": reserved_authority("127.0.0.1"),
+    # Also a parser bug: partition(":") on a bracketed authority yielded a host of "[".
+    "reserved-host-loopback-ipv6-bracketed": reserved_authority("[::1]"),
+    "reserved-host-rfc1918": reserved_authority("10.0.0.5"),
+    "reserved-host-link-local": reserved_authority("169.254.1.1"),
+    # U+FF45 FULLWIDTH LATIN SMALL LETTER E. Maps to example.com under UTS-46, so the name
+    # that would actually resolve is reserved; NFKC normalisation is what catches it.
+    "reserved-host-fullwidth-idna": reserved_authority("\uff45xample.com"),
     "removed-enum-value-independently-reproducible": removed_enum_value,
     "empty-reproduction-string": empty_reproduction,
 }
@@ -704,6 +719,18 @@ def main():
         results.append(("every-unevidenced-exposure-is-reported", "accept, one warn each",
                         rc == 0 and n == len(e["axes"]["failure_mode"]["known_exposures"]),
                         f"warned {n} times\n" + out))
+
+    # --- a globally reachable host, including a bare IP, is still accepted ---
+    # The IP rule rejects "not globally reachable", so the negative control matters: an
+    # over-broad version of it would reject every real citation that uses an address.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        for ev in _all_evidence(e):
+            ev["source"] = "https://93.184.216.34/report"
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("globally-reachable-ip-literal-is-accepted", "accept", rc == 0, out))
 
     # --- `derivative` is accepted, and exists because the axis was not exhaustive ---
     # A blog restating a vendor's release notes is not the subject, so it is not first-party,

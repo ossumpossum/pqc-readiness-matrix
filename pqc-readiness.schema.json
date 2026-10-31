@@ -540,7 +540,7 @@
         "source": {
           "type": "string",
           "pattern": "^https://",
-          "$comment": "The gate additionally REJECTS a source under a name RFC 2606 reserves for documentation (.test, .example, .invalid, .localhost, and example.com/.net/.org). That check is in validate.py rather than here, because expressing it as a pattern needs a negative lookahead that no reviewer can audit by eye; the cost is that a consumer validating against this schema alone does not get it."
+          "$comment": "The gate additionally REJECTS a source whose host cannot carry a real citation: the documentation and non-resolvable names in the IANA Special-Use Domain Names registry (RFC 6761, which updates RFC 2606) plus ICANN's .internal, and any IP literal that is not globally reachable, which covers RFC 5737 and RFC 3849 documentation ranges as well as loopback, link-local and RFC 1918. That check is in validate.py rather than here, because expressing it as a pattern needs a negative lookahead that no reviewer can audit by eye, and because the IP test belongs in code; the cost is that a consumer validating against this schema alone does not get it."
         },
         "excerpt": {
           "type": "string",

@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          63 behaviours the gate must have
+tests/test_gate.py          72 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -30,7 +30,7 @@ typed. TTLs are per axis, because one global number is wrong in both directions:
 | standardisation | 365d | An RFC number does not rot in six months |
 | implementation | 90d | A `default-on` claim can rot faster than this, so treat 90d as an enforceable review cadence rather than a guarantee |
 | interoperability | 180d | A plugfest result ages with the stacks, not with the spec |
-| failure_mode | 180d | Keyed to the **exposures**, which are deployment behaviour and move with implementations, not to the negotiation-failure claim, which rests on RFC 8446 and does not rot. A row whose only failure-mode evidence is a specification is carrying the wrong evidence for this TTL |
+| failure_mode | 180d | The exposures are deployment behaviour and move with implementations. The negotiation-failure claim rests on RFC 9846 and does not rot, and the gate keys the TTL to the OLDEST evidence anywhere under the axis, so a specification citation drives this clock too. A row whose only failure-mode evidence is a specification is carrying the wrong evidence for this TTL |
 
 Each axis has **one** floor status that asserts nothing and is therefore exempt: `none` for
 standardisation and implementation, `not_assessed` for interoperability and failure_mode. Note that
@@ -138,11 +138,15 @@ round the strongest-sounding enum value was the better-rewarded lie.
 1. **A plausible host still defeats this.** A row with `third-party` on every block, a one-line basis,
    invented excerpts marked `verbatim: yes`, dated today, under a host nobody can check offline,
    passes. It is committed as a test case named `plausible-host-fabrication-still-passes` so this
-   cannot quietly become a claim that it does not. What **is** now rejected is a source under a name
-   is reserved for documentation, testing or non-DNS resolution. The list is the IANA Special-Use
-   Domain Names registry: `.test`, `.example`, `.invalid`, `.localhost`, `.local`, `.onion`, `.alt`,
-   `example.com/.net/.org`, `home.arpa`, `service.arpa`, `resolver.arpa`, plus `.internal`, which
-   ICANN reserved by board resolution and which is in no IETF registry. The attribution matters and
+   cannot quietly become a claim that it does not. What **is** now rejected is a source whose host
+   cannot carry a real citation. Two families: the documentation and non-resolvable **names**, taken
+   from the IANA Special-Use Domain Names registry (`.test`, `.example`, `.invalid`, `.localhost`,
+   `.local`, `.onion`, `.alt`, `example.com/.net/.org`, `home.arpa`, `service.arpa`,
+   `resolver.arpa`) plus `.internal`, which ICANN reserved by board resolution and which is in no
+   IETF registry; and any **IP literal that is not globally reachable**, which covers the RFC 5737
+   and RFC 3849 documentation ranges along with loopback, link-local and RFC 1918. The registry
+   holds further entries this does not list, such as the `in-addr.arpa` reverse zones, so this is
+   the documentation-and-non-resolvable subset of it and not the whole thing. The attribution matters and
    the first version of this check got it wrong by citing RFC 2606 alone: RFC 2606 s2 reserves only
    the four top-level names, its s3 reports that IANA "also currently has" the three second-level
    names reserved, its s4 records IANA agreeing to "the four top level domain name reservations
@@ -175,10 +179,15 @@ round the strongest-sounding enum value was the better-rewarded lie.
   two contradictory rows **that name the protocol the same way** cannot both pass. The protocol name is
   normalised to alphanumerics first, so `TLS1.3` and `TLS 1.3` collide as intended; see gap 9 for what
   that still does not catch.
-- A `source` or document `url` under a name **RFC 2606** reserves for documentation is rejected:
-  `.test`, `.example`, `.invalid`, `.localhost`, and `example.com/.net/.org`. The fabricated row that
-  motivated the #46 changes cited `https://example.invalid/...` on every axis and validated with exit
-  0. This needs no network, so link rot and rate limits cannot make it flaky, which is what lets it be
+- A `source` or document `url` whose host cannot carry a real citation is rejected. That means the
+  documentation and non-resolvable names in the IANA Special-Use Domain Names registry, plus ICANN's
+  `.internal`, plus any IP literal that is not globally reachable. The fabricated row that motivated
+  the #46 changes cited `https://example.invalid/...` on every axis and validated with exit 0, and
+  three later evasions of this check were each measured rather than imagined: userinfo
+  (`https://ref@example.com/`), percent-encoding, and an IP literal in RFC 5737's documentation
+  range. The attribution matters too, and the first version got it wrong by citing RFC 2606 alone:
+  **RFC 6761 updates RFC 2606** and is what the registry cites. This needs no network, so link rot
+  and rate limits cannot make it flaky, which is what lets it be
   a gate rather than a warning. The check lives in `validate.py` rather than in the schema because
   expressing it as a pattern needs a negative lookahead no reviewer can audit by eye; the cost is that
   a consumer validating against the schema alone does not get it.
@@ -203,7 +212,7 @@ round the strongest-sounding enum value was the better-rewarded lie.
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 63 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 72 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
 measurable rather than asserted.
@@ -212,13 +221,13 @@ The report splits by what each case expects, because the aggregate was uninterpr
 expecting **rejection** can die when the exit code is forced to success, and a case expecting
 acceptance cannot, since the mutant agrees with it. Mixing the two made that mutant's number drift
 upward every time an acceptance case was added, which read as the suite weakening when it was the
-metric mixing populations. Measured 2026-10-31, against 51 rejection cases and 12 acceptance cases:
+metric mixing populations. Measured 2026-10-31, against 59 rejection cases and 13 acceptance cases:
 
 | Mutant | Rejection cases killed | Acceptance cases killed |
 |---|---|---|
-| semantic layer returns no findings | 26 of 51 | 2 of 12 |
-| schema layer yields no errors | 14 of 51 | 0 of 12 |
-| exit code always reports success | 49 of 51 | 0 of 12 |
+| semantic layer returns no findings | 34 of 59 | 2 of 13 |
+| schema layer yields no errors | 14 of 59 | 0 of 13 |
+| exit code always reports success | 57 of 59 | 0 of 13 |
 
 The two rejection cases that survive the exit-code mutant are the two that exit **2** through the
 gate's own `die()` path, so they do not depend on the mutated return at all. That is the correct
@@ -297,7 +306,7 @@ These are limits of what is here, not a to-do list for the project.
 9. **Protocol names are free text.** Normalising to alphanumerics catches `TLS1.3` against `TLS 1.3`;
    it does not catch `TLSv1.3`, so two contradictory rows can still coexist under different spellings.
    The fix is a controlled vocabulary: an enum, or a committed protocol registry. Not here.
-10. **The suite asserts rejection, not the reason.** Most of the 51 rejection cases check only that
+10. **The suite asserts rejection, not the reason.** Most of the 59 rejection cases check only that
     the gate exits non-zero, not which rule fired, so an over-broad rule could satisfy several of them
     for the wrong reason. The mutation report and the population split are partial answers; asserting
     an expected message per case is the real one. This gap previously said "32 cases" while two

@@ -25,9 +25,11 @@ does not rot in 180 days, and a default-on claim can rot in two weeks.
 """
 import datetime as dt
 import json
+import ipaddress
 import re
 import pathlib
 import sys
+import unicodedata
 import urllib.parse
 
 TTL_DAYS = {
@@ -106,22 +108,44 @@ def parse_date(s):
 
 
 def reserved_name(url):
-    """The host of `url`, if it is a name reserved for documentation. Otherwise None.
+    """The host of `url`, if it cannot host a real citation. Otherwise None.
 
-    The authority is parsed rather than pattern-matched. The first version took the host as
-    `[^/?#:]+`, which keeps userinfo, so `https://ref@example.com/report` compared
-    "ref@example.com" against the reserved list, matched nothing, and let a fully fabricated
-    row pass with exit 0. Percent-encoding evaded it the same way, so the host is unquoted
-    before comparison.
+    The authority is parsed rather than pattern-matched, and each of these cases was a
+    measured evasion of an earlier version rather than a hypothetical:
+
+    - `[^/?#:]+` kept the userinfo, so `https://ref@example.com/report` compared
+      "ref@example.com" against the list, matched nothing, and let a fully fabricated row
+      pass with exit 0. Percent-encoding got through the same way.
+    - An IP literal bypassed the name list entirely. Rewriting every source in the exemplar
+      to `https://192.0.2.1/report` validated with exit 0. RFC 5737 and RFC 3849 reserve
+      documentation ranges that are the exact IP analogue of example.com, and loopback,
+      link-local and RFC 1918 addresses are no more citable. `is_global` covers all of them
+      in one test, and it is the right test: a citation has to be reachable by a reader.
+    - `partition(":")` on a bracketed IPv6 authority yields a host of "[".
+    - A fullwidth U+FF45 in `example.com` passed while mapping to `example.com` under
+      UTS-46, so the name that would actually resolve WAS reserved. NFKC closes that.
     """
     m = re.match(r"^https://([^/?#]*)", str(url))
     if not m:
         return None
-    # authority = [userinfo "@"] host [":" port]; take the host.
-    host = m.group(1).rpartition("@")[2].partition(":")[0]
-    host = urllib.parse.unquote(host).strip().rstrip(".").lower()
+    authority = m.group(1).rpartition("@")[2]
+    # Bracketed IPv6 has to come off before any split on ":", or the port split eats it.
+    bracket = re.match(r"^\[([^\]]*)\]", authority)
+    host = bracket.group(1) if bracket else authority.partition(":")[0]
+    host = urllib.parse.unquote(host)
+    host = unicodedata.normalize("NFKC", host).strip().rstrip(".").lower()
     if not host:
         return None
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        # Reachability is the point. A documentation, loopback, link-local or private
+        # address cannot be a source a reader can open.
+        return host if not ip.is_global else None
+
     if host in RESERVED_DOMAINS or any(host.endswith("." + d) for d in RESERVED_DOMAINS):
         return host
     if host.rsplit(".", 1)[-1] in RESERVED_TLDS:
