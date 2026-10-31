@@ -50,6 +50,10 @@ FLOOR = {
 # documents to carry a real publication date, so the "document newer than the evidence" clock
 # cannot be switched off by omitting a field.
 STANDARDISATION_SETTLED = ("approved", "published", "superseded", "deprecated", "withdrawn")
+# Independence values that do not establish the claim against a disinterested source.
+# `unknown` is here because it asserts nothing, not because it is suspect: it is the honest
+# value, and it must still be visible rather than counting as provenance.
+INDEPENDENCE_WEAK = ("first-party", "unknown")
 
 
 def die(msg):
@@ -86,6 +90,11 @@ def walk_evidence(node):
     elif isinstance(node, list):
         for v in node:
             yield from walk_evidence(v)
+
+
+def axis_independence(axis_obj):
+    """The set of independence values supporting one axis."""
+    return {ev.get("independence") for ev in walk_evidence(axis_obj) if ev.get("independence")}
 
 
 def axis_evidence_dates(axis_obj):
@@ -141,6 +150,30 @@ def check_entry(entry, today, top10):
                     msg += (f" [needs-owner, but past TTL+{NEEDS_OWNER_GRACE_DAYS}d grace, "
                             f"so it fails: an unowned row cannot stay green forever]")
                 errs.append(msg)
+
+    # --- provenance is required on every evidence object, so the gate has to read it ---
+    # It previously did not. `independence` was mandatory and NO rule here consulted it, so
+    # flipping every block on a row from `independently-reproducible` to `first-party`
+    # produced a byte-identical verdict: a required field that nothing checked, which is the
+    # same defect as a manifest carrying titles nothing reads. Raised by @leprecha1 on
+    # issue #46 as the risk of false confidence through classification alone, and measured.
+    #
+    # This REPORTS and does not fail, and the exemplar is the reason. Its implementation axis
+    # is `default-on` on two first-party sources, because a vendor's own release notes are the
+    # best evidence that exists for that vendor's default. A gate that failed such a row would
+    # not produce better evidence; it would produce rows relabelled `third-party` to get green,
+    # which is the gaming this design is supposed to remove. Making it fail is a one-line
+    # change if the project decides a status above some threshold must carry a disinterested
+    # source, but that is a policy call for the project rather than for this gate.
+    for axis in TTL_DAYS:
+        obj = axes.get(axis)
+        if not obj or obj.get("status") == FLOOR[axis]:
+            continue
+        kinds = axis_independence(obj)
+        if kinds and kinds <= set(INDEPENDENCE_WEAK):
+            warns.append(f"{axis}: status {obj.get('status')!r} rests only on "
+                         f"{'/'.join(sorted(kinds))} evidence, with no third-party or "
+                         f"independently-reproducible source")
 
     std = axes.get("standardisation", {})
 
@@ -315,7 +348,16 @@ def main():
                     ages.append((today - min(d)).days)
             summary = " ".join(
                 f"{a[:6]}={entry.get('axes', {}).get(a, {}).get('status', '?')}" for a in TTL_DAYS)
-            print(f"ok   {f.name}  oldest_evidence={max(ages) if ages else 'n/a'}d  {summary}")
+            # Printed because the renderer does not exist yet and provenance a reader cannot see
+            # cannot be contested. Counts, not a score: a single trust number for a row is the
+            # thing this schema exists to refuse.
+            counts = {}
+            for ev in walk_evidence(entry):
+                k = ev.get("independence", "?")
+                counts[k] = counts.get(k, 0) + 1
+            mix = ",".join(f"{k}:{v}" for k, v in sorted(counts.items())) or "none"
+            print(f"ok   {f.name}  oldest_evidence={max(ages) if ages else 'n/a'}d  {summary}"
+                  f"  indep={mix}")
         for w in warns:
             print(f"     warn: {w}")
 

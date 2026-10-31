@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          32 behaviours the gate must have
+tests/test_gate.py          36 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -56,6 +56,45 @@ Two classes is the smallest split that fixes the TLS case, not a claim to be the
 SSH wants KEX plus host auth plus user auth, DNSSEC has no key establishment at all, and a Noise-style
 static key does both jobs in one primitive. Whoever owns those rows should name their own classes.
 
+## Evidence provenance: what each `independence` value means
+
+Added after review on [#46](https://github.com/OWASP/quantum-security-project/issues/46), where
+@leprecha1 asked for reproducible criteria per value, an explicit way to say "not established", and
+an assurance that mandatory classification does not become a substitute for verification. All three
+were right, and the first two were simply missing: the field carried a one-line rationale and no test.
+
+**Independence is a property of the evidence-to-claim pair, not of the document.** The same RFC is
+third-party evidence that a mechanism is standardised and first-party evidence that its own authors'
+product ships it. That is why the field sits on each evidence object rather than on a registry of
+sources, and why the same URL can legitimately carry different values on two different rows.
+
+| Value | The test | Typical case | Basis required |
+|---|---|---|---|
+| `first-party` | The evidence author and the subject of the claim share an interest | A vendor's release notes about that vendor's implementation; a specification written by the implementers; vendor telemetry | no |
+| `third-party` | The author is not the subject and did not take the subject's word for it | An independent test report; a CVE analysis; a paper measuring someone else's code | no |
+| `independently-reproducible` | A reader holding the named artifacts can re-run it and get the same answer | A published test harness with pinned versions; a plugfest procedure anyone can repeat | **yes**, naming what to re-run |
+| `unknown` | Cannot be established from the source | Authorship or affiliation not stated and not resolvable | **yes**, saying why |
+
+`independence_basis` is required for the last two and optional for the first two. The asymmetry is
+deliberate: `unknown` needs a reason so it cannot become a dump, and `independently-reproducible` is
+the strongest value in the enum while previously asserting reproducibility without naming anything to
+reproduce. `first-party` and `third-party` are cheap for a reviewer to check against the source URL.
+
+**Three residuals, stated rather than implied.**
+
+1. **Nothing stops `third-party` being typed over a vendor URL**, and that is now the cheapest false
+   value in the enum because it needs no basis. The gate cannot settle it. What it can do is show the
+   mix, which it does: every passing row prints its `indep=` counts, so a vendor host sitting under a
+   `third-party` label is visible to a reader. That is contestability by display rather than by
+   validation, and it is the honest limit.
+2. **`unknown` is not an exemption.** It describes the evidence, not a floor status, so it does not
+   relax a TTL and does not excuse a status from needing evidence.
+3. **Provenance is not validity.** This schema records where a claim came from, which is cheap, and
+   cannot assess whether the claim is true, which is not. Classification must not be read as a trust
+   score, which is why the gate prints counts and never a composite number. The step that would turn
+   provenance into verification is fetching `source` and confirming `excerpt` appears there; that is
+   gap 3 and it is not done.
+
 ## What the gate enforces beyond types
 
 - A status must be earned by its own contents: `published` needs a document, `pairwise` needs a pair
@@ -74,17 +113,28 @@ static key does both jobs in one primitive. Whoever owns those rows should name 
   two contradictory rows **that name the protocol the same way** cannot both pass. The protocol name is
   normalised to alphanumerics first, so `TLS1.3` and `TLS 1.3` collide as intended; see gap 9 for what
   that still does not catch.
+- `independence` is **read**, which it previously was not. It was required on every evidence object
+  and no rule consulted it, so flipping every block on a row from `independently-reproducible` to
+  `first-party` left the verdict byte-identical: a required field that nothing checked. An axis above
+  its floor whose supporting evidence is entirely `first-party` or `unknown` is now **reported**, and
+  every passing row prints its independence counts.
+  This reports and does not fail, and the exemplar is the reason: its implementation axis is
+  `default-on` on two first-party sources, because a vendor's own release notes are the best evidence
+  that exists for that vendor's default. A gate that failed such a row would not produce better
+  evidence, it would produce rows relabelled to get green. Making it fail is a one-line change if the
+  project decides a status above some threshold must carry a disinterested source, but that is a
+  policy call for the project rather than for this gate.
 - Discovery is recursive and case-insensitive, and a stray non-JSON file under `protocols/` is a
   failure, because a renderer may still read it.
 - The gate **fails closed** in both directions that matter. Without `jsonschema` it exits 2 rather than
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 32 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 36 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
-measurable rather than asserted. Measured on 2026-10-30: disabling the semantic checks leaves 20 of 32
-correct, disabling the schema layer 23 of 32, and forcing the exit code to success 4 of 32.
+measurable rather than asserted. Measured on 2026-10-31: disabling the semantic checks leaves 23 of 36
+correct, disabling the schema layer 25 of 36, and forcing the exit code to success 6 of 36.
 
 ## Known gaps, stated rather than discovered later
 
@@ -110,7 +160,10 @@ These are limits of what is here, not a to-do list for the project.
    IKEv2, DNSSEC.
 5. **No way to contest a cell.** One maintainer, one evidence block per claim. There is no `disputed`
    flag, no second attestation, and no way for a claim to carry two independent sources, which is the
-   property that matters most when a source is first-party.
+   property that matters most when a source is first-party. Partly narrowed on 2026-10-31: a
+   first-party-only axis is now reported and every row prints its independence counts, so the
+   condition is at least **visible**. Visible is not contestable. A reader who disagrees with a cell
+   still has nowhere in the data to say so, and that remains open.
 6. **A PR is checked by its own copy of the gate.** The workflow checks out the PR head, so a PR that
    edits both a row and `validate.py` grades itself, and a green check on such a PR means nothing. This
    is inherent to `pull_request` CI rather than specific to this design; the mitigation is human review

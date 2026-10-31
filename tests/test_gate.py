@@ -50,6 +50,19 @@ def _refresh_implementation_dates(row):
 _refresh_implementation_dates(GOOD)
 
 
+def _all_evidence(node):
+    """Every evidence object in a row. They nest per axis AND per implementation, so a
+    top-level loop reaches two of the four and a probe can look like a pass."""
+    if isinstance(node, dict):
+        if "source_kind" in node and "independence" in node:
+            yield node
+        for v in node.values():
+            yield from _all_evidence(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _all_evidence(v)
+
+
 def mutate(fn):
     e = copy.deepcopy(GOOD)
     fn(e)
@@ -184,6 +197,37 @@ def settled_status_with_only_undated_documents(e):
     }]
 
 
+def unknown_independence_without_basis(e):
+    """Use the honest value without saying why it could not be established.
+
+    `unknown` was added to the enum after @leprecha1 raised, on issue #46, that a mandatory
+    classification with no escape hatch forces an author to assert independence they cannot
+    establish. The escape hatch must not be cheaper than the three positive values it exists
+    to replace, or it becomes the default and the field means nothing again.
+    """
+    e["axes"]["standardisation"]["evidence"]["independence"] = "unknown"
+
+
+def provenance_maximal_without_basis(e):
+    """The strongest value in the enum on every block, asserted and unexplained.
+
+    Measured on 2026-10-31 against the previous gate: this row passed with exit 0 while every
+    source was `https://example.invalid/...`, every excerpt was invented and marked
+    `verbatim: yes`, and it reported `oldest_evidence=0d` against the real row's 17d, so the
+    fabricated row graded as the fresher of the two. `independently-reproducible` now costs a
+    sentence naming what to re-run.
+
+    What this case does NOT prove: adding a plausible basis string makes this row pass again,
+    because nothing fetches `source`. That is gap 3, and it is the only thing that would turn
+    provenance into verification.
+    """
+    for ev in _all_evidence(e):
+        ev["independence"] = "independently-reproducible"
+        ev["source"] = "https://example.invalid/pqc/does-not-exist"
+        ev["excerpt"] = "This document confirms the mechanism is fully deployed and interoperable."
+        ev["verbatim"] = "yes"
+
+
 MUST_FAIL = {
     "no-documents-but-published": no_documents,
     "blank-implementation-name": blank_implementation,
@@ -207,6 +251,8 @@ MUST_FAIL = {
     "rfc-without-published-date": rfc_without_published,
     "unversioned-draft-id": unversioned_draft,
     "settled-status-with-only-undated-documents": settled_status_with_only_undated_documents,
+    "unknown-independence-without-basis": unknown_independence_without_basis,
+    "provenance-maximal-without-basis": provenance_maximal_without_basis,
 }
 
 
@@ -389,6 +435,43 @@ def main():
         (d / (e["slug"] + ".json")).write_text(json.dumps(e))
         rc, out = run_gate(d)
         results.append(("needs-owner-cannot-suppress-forever", "reject", rc != 0, out))
+
+    # --- the escape hatch works when it is used honestly ---
+    # `unknown` plus a reason must VALIDATE, or the field still forces a guess and the
+    # addition is cosmetic. The basis field itself was impossible before this change:
+    # additionalProperties:false rejected it with four schema errors, so an author could
+    # neither say "not established" nor say why.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        ev = e["axes"]["standardisation"]["evidence"]
+        ev["independence"] = "unknown"
+        ev["independence_basis"] = ("Authors' affiliations are not stated in the document and "
+                                    "could not be resolved from the IETF datatracker entry.")
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("unknown-independence-with-basis-accepted", "accept",
+                        rc == 0 and "unknown:1" in out, out))
+
+    # --- independence must be CONSEQUENTIAL, not decorative ---
+    # The defect this closes: the field was required on every evidence object and no rule in
+    # the gate read it, so flipping every block from the strongest value to the weakest left
+    # the verdict byte-identical. Measured 2026-10-31. This case fails if that is ever true
+    # again, which is the only way to keep a required field from becoming an unchecked claim.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        baseline = copy.deepcopy(GOOD)
+        (d / (baseline["slug"] + ".json")).write_text(json.dumps(baseline))
+        rc_a, out_a = run_gate(d)
+        flipped = copy.deepcopy(GOOD)
+        for ev in _all_evidence(flipped):
+            ev["independence"] = "first-party"
+        (d / (flipped["slug"] + ".json")).write_text(json.dumps(flipped))
+        rc_b, out_b = run_gate(d)
+        differs = (out_a != out_b
+                   and out_b.count("rests only on") > out_a.count("rests only on"))
+        results.append(("independence-is-read-not-decorative", "accept both, differ",
+                        rc_a == 0 and rc_b == 0 and differs, out_a + "\n--- flipped ---\n" + out_b))
 
     # --- the manifest must fail CLOSED, not open ---
     # Deleting top10.json previously made every related_owasp_entries value pass: a row citing
