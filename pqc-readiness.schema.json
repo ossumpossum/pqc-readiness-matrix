@@ -551,7 +551,8 @@
             "yes",
             "no"
           ],
-          "description": "Required with an excerpt. Version 1 called the field 'quote' and its own exemplar put an editorial paraphrase in it."
+          "description": "Required with an excerpt. `yes` means the excerpt is a quotation of the source with whitespace normalised, NOT that it is a byte substring of the served bytes. Version 1 called the field 'quote' and its own exemplar put an editorial paraphrase in it.",
+          "$comment": "Defined on 2026-10-31 because it was undefined and four of the exemplar's seven excerpts are quoted from hard-wrapped RFC and Markdown text, so they are genuine quotations that are not byte substrings. Normalisation is also what any excerpt check in gap 3 has to implement: a byte check would fail true rows whose source wraps, and would fail every HTML source, where the text a human quotes is split across markup. The normalised check works on all of them."
         },
         "verified_on": {
           "$ref": "#/$defs/date"

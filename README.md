@@ -233,12 +233,21 @@ These are limits of what is here, not a to-do list for the project.
    Without a generator someone will hand-maintain a Markdown table and the staleness problem reappears
    downstream in an artifact nothing validates. It is a small generator over `protocols/*.json` and it
    is next, but it is not in this drop.
-2. **Draft currency is not checked.** The schema requires a revision suffix on an Internet-Draft id,
-   which catches an unversioned reference and **does not** catch a renamed or replaced one. A row citing
-   `draft-kwiatkowski-tls-ecdhe-mlkem-00` validates today, and that is the exact stale citation this
-   design is reacting to. Closing it needs a CI step resolving each id against the IETF Datatracker and
-   asserting the revision is current and the state is not `replaced`. The exemplar's citations were
-   checked by hand on 2026-10-30; doing it by hand is the gap.
+2. **Document currency is not checked, for drafts OR for RFCs.** The schema requires a revision suffix
+   on an Internet-Draft id, which catches an unversioned reference and **does not** catch a renamed or
+   replaced one. A row citing `draft-kwiatkowski-tls-ecdhe-mlkem-00` validates today, and that is the
+   exact stale citation this design is reacting to.
+   **An obsoleted RFC is the same gap and is worse, because it looks settled.** Measured on this
+   repository's own row on 2026-10-31: it cited RFC 8446 as the constitutive TLS 1.3 specification, and
+   RFC 9846 obsoleted RFC 8446 on 2026-07-11, moving the quoted text from Section 4.4.4 to Section
+   4.5.3. The gate passed it, and passed it for a structural reason rather than by luck: a superseded
+   RFC still carries a publication date, so the rule demanding one is satisfied, and nothing available
+   offline knows the document was obsoleted.
+   Closing both needs the same CI step: resolve every cited id against the IETF Datatracker or the RFC
+   Editor index and assert that a draft's revision is current and its state is not `replaced`, and that
+   an RFC's `obsoleted_by` is empty. A hand-maintained list of superseded documents is deliberately NOT
+   the answer here, because that list rots exactly the way the citations do. The exemplar's citations
+   were checked by hand on 2026-10-30 and that check missed this; doing it by hand is the gap.
 3. **No link checking and no content verification.** `source` must be `https://` and must not sit
    under a reserved name, and that is the whole of what is checked. Nothing fetches it,
    snapshots it, or confirms that `excerpt` appears there, so `verbatim: yes` remains an author's
@@ -246,12 +255,16 @@ These are limits of what is here, not a to-do list for the project.
    row: two excerpts truncated immediately before a clause that qualified the claim, and one that was
    **not a literal substring of the cited file at all**, because `NEWS.md` hard-wraps it and the bullet
    quoted did not name the mechanism the row is about. A different bullet did.
-   Two practical notes for whoever closes this. A literal substring check will fail true rows whose
-   source is hard-wrapped, and it cannot work at all against an HTML page, where the rendered text a
-   human quotes is not a substring of the served bytes. That is why the exemplar's implementation
-   evidence now cites raw source files at pinned tags, where the excerpt **is** literal; it is checked
-   against the fetched bytes in the commit that introduced it, which is not the same as being checked
-   on every run.
+   `verbatim` is now **defined**, which it was not: `yes` means the excerpt is a quotation of the
+   source with whitespace normalised, and not that it is a byte substring of the served bytes. That
+   definition matters for whoever closes this gap, because a byte check is the wrong primitive. It
+   fails true rows whose source is hard-wrapped, which is most RFC and Markdown text, and it fails
+   every HTML source, where the sentence a human quotes is split across markup. Four of this row's
+   seven excerpts are in that position. A whitespace-normalised check works on all of them, and the
+   reason an excerpt check still cannot be a gate is network dependence rather than anything about the
+   source format. The exemplar's implementation evidence cites raw source files at pinned tags, where
+   the excerpt is literal as well as normalised; that was checked against the fetched bytes in the
+   commit that introduced it, which is not the same as being checked on every run.
 4. **The review burden is real.** One row per mechanism class means up to 60 rows for 30 protocols,
    600 or more evidence blocks, and with these TTLs roughly 540 axis re-verifications a year. That is
    not sustainable by one person. Six to eight rows is the sane starting point: TLS twice, SSH twice,

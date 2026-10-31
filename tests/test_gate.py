@@ -95,6 +95,22 @@ def mutate(fn):
     return e
 
 
+def doc_by_id(e, prefix):
+    """The cited document whose id starts with `prefix`. Raises if absent or ambiguous.
+
+    Fixtures used to index `documents[0]` and `documents[2]`. Adding RFC 9846 to the row
+    shifted both: one fixture went red, and three kept passing while mutating a different
+    document than the one they are named after. A fixture that silently changes its own
+    subject is worse than one that breaks, so this raises rather than returning None.
+    """
+    hits = [d for d in e["axes"]["standardisation"]["documents"]
+            if str(d.get("id", "")).startswith(prefix)]
+    if len(hits) != 1:
+        raise AssertionError(f"expected exactly 1 cited document starting {prefix!r}, "
+                             f"found {len(hits)}")
+    return hits[0]
+
+
 def no_documents(e):
     e["axes"]["standardisation"] = {"status": "published", "documents": []}
 
@@ -181,11 +197,11 @@ def failure_mode_no_evidence(e):
 
 
 def doc_superseded_mismatch(e):
-    e["axes"]["standardisation"]["documents"][0]["superseded_by"] = "RFC 99999"
+    doc_by_id(e, "RFC 10024")["superseded_by"] = "RFC 99999"
 
 
 def doc_published_after_evidence(e):
-    e["axes"]["standardisation"]["documents"][0]["published"] = "2026-10-20"
+    doc_by_id(e, "RFC 10024")["published"] = "2026-10-20"
 
 
 def boolean_enum(e):
@@ -197,11 +213,11 @@ def wrong_schema_version(e):
 
 
 def rfc_without_published(e):
-    e["axes"]["standardisation"]["documents"][0].pop("published")
+    doc_by_id(e, "RFC 10024").pop("published")
 
 
 def unversioned_draft(e):
-    e["axes"]["standardisation"]["documents"][2]["id"] = "draft-ietf-uta-pqc-app"
+    doc_by_id(e, "draft-ietf-uta-pqc-app")["id"] = "draft-ietf-uta-pqc-app"
 
 
 def settled_status_with_only_undated_documents(e):
@@ -290,7 +306,7 @@ def reserved_authority(host):
 def reserved_document_url(e):
     """The same rule has to cover `documents[].url`, which is not an evidence block and so
     is not reached by the evidence walk. Asserted because it was added separately."""
-    e["axes"]["standardisation"]["documents"][0]["url"] = "https://standards.invalid/rfc10024"
+    doc_by_id(e, "RFC 10024")["url"] = "https://standards.invalid/rfc10024"
 
 
 def removed_enum_value(e):
