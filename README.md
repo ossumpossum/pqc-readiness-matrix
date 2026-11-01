@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          86 behaviours the gate must have
+tests/test_gate.py          96 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -69,12 +69,29 @@ first-party evidence of its own publication and third-party evidence about a pro
 references. That is why the field sits on each evidence object rather than on a registry of sources,
 and why the same URL can legitimately carry different values on two different rows.
 
-**One axis per field.** The first round shipped `first-party | third-party |
-independently-reproducible | unknown`, which conflated two questions: three of those values describe
-the relation between the evidence's author and the subject of the claim, while `independently-
-reproducible` describes a property of method. A vendor's own pinned test harness is both, and there
-was no precedence rule, so the same evidence had two defensible values. Reproducibility moved to its
-own optional `reproduction` field and the enum is now a single axis.
+**THREE properties, three fields.** The first round shipped `first-party | third-party |
+independently-reproducible | unknown`, which conflated two questions, and the second round split one
+of them off. @leprecha1 named the third on the issue, and it is the distinction that resolves a case
+this README could not previously type:
+
+| Property | Field | Required |
+|---|---|---|
+| Who wrote it, relative to the claim | `independence` + `independence_basis` | yes |
+| What a reader could re-run | `reproduction` | no |
+| That somebody did, and who | `verification` | no |
+
+In their words: "A maintainer reproducing a result against upstream source code may provide
+reproducible evidence, but that does not necessarily constitute independently verified evidence."
+That is exactly the case the enum could not express. Reading `TLS_DEFAULT_GROUP_LIST` at a pinned
+tag makes the reader not the subject and takes nobody's word, so the author-relation axis alone
+wanted to call a self-measurement `third-party`, which is the most independent-sounding value in the
+enum for a self-attestation by the row's sole maintainer. The exemplar now carries exactly that, with
+the maintainer's own name in `verified_by`, so a reader can see what kind of attestation it is.
+
+`verification` is **optional and earns a row nothing**, for the same reason the two grading rules
+were removed: nothing offline can check an attestation, so any rule keyed to its presence would
+reward typing it. The suite holds that line directly, asserting that adding it to every block on a
+row changes no warning.
 
 | Value | The test | Typical case |
 |---|---|---|
@@ -230,7 +247,7 @@ round the strongest-sounding enum value was the better-rewarded lie.
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 86 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 96 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
 measurable rather than asserted.
@@ -239,13 +256,13 @@ The report splits by what each case expects, because the aggregate was uninterpr
 expecting **rejection** can die when the exit code is forced to success, and a case expecting
 acceptance cannot, since the mutant agrees with it. Mixing the two made that mutant's number drift
 upward every time an acceptance case was added, which read as the suite weakening when it was the
-metric mixing populations. Measured 2026-10-31, against 72 rejection cases and 14 acceptance cases:
+metric mixing populations. Measured 2026-10-31, against 78 rejection cases and 18 acceptance cases:
 
 | Mutant | Rejection cases killed | Acceptance cases killed |
 |---|---|---|
-| semantic layer returns no findings | 47 of 72 | 2 of 14 |
-| schema layer yields no errors | 14 of 72 | 0 of 14 |
-| exit code always reports success | 70 of 72 | 0 of 14 |
+| semantic layer returns no findings | 48 of 78 | 4 of 18 |
+| schema layer yields no errors | 19 of 78 | 0 of 18 |
+| exit code always reports success | 76 of 78 | 0 of 18 |
 
 The two rejection cases that survive the exit-code mutant are the two that exit **2** through the
 gate's own `die()` path, so they do not depend on the mutated return at all. That is the correct
@@ -253,7 +270,14 @@ result rather than a hole.
 
 ## Known gaps, stated rather than discovered later
 
-These are limits of what is here, not a to-do list for the project.
+These are limits of what is here, not a to-do list for the project. On ORDER, @leprecha1's
+priority on the issue is the right one and this repository's own history is the argument for it:
+external evidence verification and citation currency come before any further provenance machinery.
+The worst defect found in the whole exchange was not a provenance question. RFC 9846 obsoleted RFC
+8446 in July 2026 and this row still cited RFC 8446 as the constitutive TLS 1.3 specification; the
+gate passed it because a superseded RFC still carries a publication date, so the rule demanding one
+was satisfied. No amount of classification would have caught that, and gap 2 would have caught it on
+the first run.
 
 1. **No renderer, and this is the most important gap.** A directory of JSON files is unreadable to a
    defender, and at the six to eight rows this should start with it is already unreadable.
@@ -297,13 +321,17 @@ These are limits of what is here, not a to-do list for the project.
    600 or more evidence blocks, and with these TTLs roughly 540 axis re-verifications a year. That is
    not sustainable by one person. Six to eight rows is the sane starting point: TLS twice, SSH twice,
    IKEv2, DNSSEC.
-5. **No way to contest a cell.** One maintainer, one evidence block per claim. There is no `disputed`
-   flag, no second attestation, and no way for a claim to carry two independent sources, which is the
-   property that matters most when a source is first-party. Narrower than it was, and not closed:
-   every axis now prints whose word its status rests on, and an unevidenced exposure is reported, so
-   the condition is **visible**. Visible is not contestable. A reader who disagrees with a cell still
-   has nowhere in the data to say so, and on this design that is the gap that matters most after the
-   renderer.
+5. **Contesting a cell: now possible, and the mechanism is @leprecha1's.** This gap said a reader
+   who disagrees with a cell has nowhere in the data to say so. Printing provenance made a cell
+   **visible**, which is not the same as **contestable**: visible is what a reader can see,
+   contestable is what a reader can write back. Their proposal is lighter than anything considered
+   here before, and deliberately not an adjudication workflow: an optional `disputed` block carrying
+   an issue or discussion URL plus a one-sentence note. The disagreement becomes part of the row,
+   travels with it, and the gate prints it.
+   What it does **not** do is decide. A disputed cell may well be correct, so a dispute never fails
+   a row; it also cannot be gamed, because adding one makes a row noisier and nothing rewards a
+   false one. Still open underneath: a claim cannot carry two independent sources, and a second
+   attestation is one `verification` block rather than a structure for several.
 6. **A PR is checked by its own copy of the gate.** The workflow checks out the PR head, so a PR that
    edits both a row and `validate.py` grades itself, and a green check on such a PR means nothing. This
    is inherent to `pull_request` CI rather than specific to this design; the mitigation is human review
@@ -325,7 +353,7 @@ These are limits of what is here, not a to-do list for the project.
 9. **Protocol names are free text.** Normalising to alphanumerics catches `TLS1.3` against `TLS 1.3`;
    it does not catch `TLSv1.3`, so two contradictory rows can still coexist under different spellings.
    The fix is a controlled vocabulary: an enum, or a committed protocol registry. Not here.
-10. **The suite asserts rejection, not the reason.** Most of the 72 rejection cases check only that
+10. **The suite asserts rejection, not the reason.** Most of the 78 rejection cases check only that
     the gate exits non-zero, not which rule fired, so an over-broad rule could satisfy several of them
     for the wrong reason. The mutation report and the population split are partial answers; asserting
     an expected message per case is the real one. This gap previously said "32 cases" while two

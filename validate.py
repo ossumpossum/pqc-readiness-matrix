@@ -305,13 +305,22 @@ def axis_provenance(axis, axis_obj):
 
 
 def independence_census(blocks):
-    """Counts per value in schema order, including zeros, plus the reproduction count."""
+    """Counts per value in schema order, including zeros, plus the three property counts.
+
+    Three separate properties, per @leprecha1 on issue #46: provenance (the independence
+    values), methodological reproducibility (`reproduction`) and independent verification
+    (`verification`). They are counted and nothing else. None of them moves a verdict,
+    because nothing available offline can check any of them.
+    """
     counts = {k: 0 for k in INDEPENDENCE_VALUES}
     for ev in blocks:
         k = ev.get("independence", "?")
         counts[k] = counts.get(k, 0) + 1
     repro = sum(1 for ev in blocks if ev.get("reproduction"))
-    return " ".join(f"{k}:{v}" for k, v in counts.items()) + f" repro={repro}/{len(blocks)}"
+    verif = sum(1 for ev in blocks if isinstance(ev.get("verification"), dict))
+    n = len(blocks)
+    return (" ".join(f"{k}:{v}" for k, v in counts.items())
+            + f" repro={repro}/{n} verified={verif}/{n}")
 
 
 def axis_evidence_dates(axis_obj):
@@ -336,6 +345,26 @@ def check_entry(entry, today, top10):
             errs.append(f"evidence verified_on {raw!r} matches the date pattern but is not a real date")
         elif (d - today).days > FUTURE_GRACE_DAYS:
             errs.append(f"evidence verified_on {raw} is more than {FUTURE_GRACE_DAYS} day in the future")
+        # The NESTED dates get the same parse. Caught by its own test on 2026-11-01: this
+        # loop read only the block's own verified_on, so verification.verified_on could be
+        # 2026-02-30 and pass, because the schema pattern admits an impossible date on
+        # purpose and this is the only thing that rejects one. Any date added to an evidence
+        # block in future needs a line here, which is the argument for keeping them few.
+        for sub in ("verification", "disputed"):
+            obj = ev.get(sub)
+            if not isinstance(obj, dict):
+                continue
+            key = "verified_on" if sub == "verification" else "raised_on"
+            raw2 = obj.get(key)
+            if raw2 is None:
+                continue
+            d2 = parse_date(raw2)
+            if d2 is None:
+                errs.append(f"{sub}.{key} {raw2!r} matches the date pattern but is not a "
+                            f"real date")
+            elif (d2 - today).days > FUTURE_GRACE_DAYS:
+                errs.append(f"{sub}.{key} {raw2} is more than {FUTURE_GRACE_DAYS} day in "
+                            f"the future")
     for doc in axes.get("standardisation", {}).get("documents", []):
         if doc.get("published") and parse_date(doc["published"]) is None:
             errs.append(f"document {doc.get('id')} published {doc['published']!r} is not a real date")
@@ -402,6 +431,20 @@ def check_entry(entry, today, top10):
     # published. Everything that still warns or fails here is an ABSENCE -- a missing
     # basis, no document carrying a publication date, an unevidenced exposure, a reserved
     # host, a breached TTL -- and an author cannot relabel their way out of an absence.
+
+    # --- a recorded dispute is printed, which is the point of recording it ---
+    # Gap 5 said a reader who disagrees with a cell has nowhere in the data to say so.
+    # Printing provenance made a cell visible; it did not make it contestable. @leprecha1's
+    # mechanism on issue #46 is lighter than anything proposed here before: link the
+    # disputed evidence to an issue and let the disagreement travel with the row.
+    #
+    # It does NOT fail the row. The gate does not adjudicate, and a disputed cell may well
+    # be correct. It also cannot be gamed, because a dispute makes a row noisier: nothing
+    # here rewards adding a false one.
+    for ev in walk_evidence(entry):
+        d = ev.get("disputed")
+        if isinstance(d, dict):
+            warns.append(f"DISPUTED: {d.get('note')} [{d.get('url')}]")
 
     # --- an exposure with no evidence is the free-text column this schema objects to ---
     # Version 2 could not express one: known_exposures items set additionalProperties:false

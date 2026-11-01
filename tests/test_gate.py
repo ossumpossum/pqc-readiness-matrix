@@ -350,6 +350,48 @@ def whitespace_basis(e):
     ev["independence_basis"] = "   \t  "
 
 
+def verification_without_attribution(e):
+    """An unattributed attestation is what this field exists to replace.
+
+    The whole value of a separate verification field is that somebody's name is on it. If
+    `verified_by` were optional, "verified" becomes another unowned label, which is the
+    defect the previous two rounds were spent removing.
+    """
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["verification"] = {"verified_on": "2026-11-01", "method": "re-read the RFC"}
+
+
+def verification_without_method(e):
+    """"Verified" with no stated method is not checkable by the next reader."""
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["verification"] = {"verified_by": "someone", "verified_on": "2026-11-01"}
+
+
+def verification_with_impossible_date(e):
+    """The date goes through the same real-date parse as every other date in the row."""
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["verification"] = {"verified_by": "someone", "verified_on": "2026-02-30",
+                          "method": "re-read the RFC"}
+
+
+def disputed_without_url(e):
+    """A dispute with nowhere to argue it is a complaint, not contestability."""
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["disputed"] = {"note": "RFC 10024 is not third-party evidence of its own publication"}
+
+
+def disputed_with_non_https_url(e):
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["disputed"] = {"url": "github.com/OWASP/quantum-security-project/issues/46",
+                      "note": "wrong label"}
+
+
+def disputed_with_blank_note(e):
+    ev = e["axes"]["standardisation"]["evidence"]
+    ev["disputed"] = {"url": "https://github.com/OWASP/quantum-security-project/issues/46",
+                      "note": "   "}
+
+
 MUST_FAIL = {
     "no-documents-but-published": no_documents,
     "blank-implementation-name": blank_implementation,
@@ -429,6 +471,12 @@ MUST_FAIL = {
     "reserved-host-unspecified": reserved_authority("0.0.0.0"),
     "removed-enum-value-independently-reproducible": removed_enum_value,
     "empty-reproduction-string": empty_reproduction,
+    "verification-without-attribution": verification_without_attribution,
+    "verification-without-method": verification_without_method,
+    "verification-with-impossible-date": verification_with_impossible_date,
+    "disputed-without-url": disputed_without_url,
+    "disputed-with-non-https-url": disputed_with_non_https_url,
+    "disputed-with-blank-note": disputed_with_blank_note,
 }
 
 
@@ -849,6 +897,96 @@ def main():
         results.append(("non-default-implementation-does-not-supply-provenance",
                         "accept, provenance from the default-on entries",
                         rc == 0 and "implem=default-on/first-party" in out, out))
+
+    # --- `verification` is a separate attestation and it EARNS A ROW NOTHING ---
+    # @leprecha1's point 3 on issue #46: independent verification must be separately
+    # attributable, not inferred from a `third-party` label. The load-bearing property is
+    # that it cannot improve a row, for the same reason the two grading rules were removed:
+    # nothing offline can check an attestation, so anything keyed to its presence would
+    # reward typing it. Adding it to every block must not change a single warning.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        bare = copy.deepcopy(GOOD)
+        # Stripped EXPLICITLY. The exemplar now carries one verification block to demonstrate
+        # the self-attestation case, so assuming the baseline has none broke this case the
+        # moment the row gained one. Derive the state you are comparing against.
+        for ev in _all_evidence(bare):
+            ev.pop("verification", None)
+        (d / (bare["slug"] + ".json")).write_text(json.dumps(bare))
+        rc_a, out_a = run_gate(d)
+        full = copy.deepcopy(GOOD)
+        for ev in _all_evidence(full):
+            ev["verification"] = {
+                "verified_by": "an unrelated reviewer",
+                "verified_on": dt.date.today().isoformat(),
+                "method": "re-fetched the source and re-read the cited section",
+                "source": "https://github.com/OWASP/quantum-security-project/issues/46",
+            }
+        (d / (full["slug"] + ".json")).write_text(json.dumps(full))
+        rc_b, out_b = run_gate(d)
+        n = len(list(_all_evidence(full)))
+        results.append(("verification-earns-a-row-nothing", "accept both, same warns",
+                        rc_a == 0 and rc_b == 0
+                        and out_a.count("warn:") == out_b.count("warn:")
+                        and f"verified=0/{n}" in out_a and f"verified={n}/{n}" in out_b,
+                        out_a + out_b))
+
+    # --- a self-attestation is allowed and is VISIBLE as one ---
+    # This is the case that could not be typed before: reading TLS_DEFAULT_GROUP_LIST at a
+    # pinned tag is reproducible and is not independently verified. The field does not
+    # forbid the maintainer's own name; it makes whose name it carries inspectable, which is
+    # the distinction @leprecha1 drew.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        ev = e["axes"]["implementation"]["implementations"][0]["evidence"]
+        ev["verification"] = {
+            "verified_by": e["maintainer"],
+            "verified_on": dt.date.today().isoformat(),
+            "method": "read TLS_DEFAULT_GROUP_LIST at tag openssl-3.5.0",
+        }
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("a-self-attestation-is-accepted-and-named", "accept",
+                        rc == 0 and "verified=1/" in out, out))
+
+    # --- a dispute is PRINTED, and does not fail the row ---
+    # Gap 5's mechanism. The gate does not adjudicate: a disputed cell may be correct, so a
+    # dispute cannot be a failure. But it must be impossible to miss, because the entire
+    # point is that a reader who disagrees gets somewhere in the DATA to say so.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        e = copy.deepcopy(GOOD)
+        ev = e["axes"]["standardisation"]["evidence"]
+        ev["disputed"] = {
+            "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+            "note": "RFC 10024 is the document itself, not third-party evidence about it",
+            "raised_on": dt.date.today().isoformat(),
+        }
+        (d / (e["slug"] + ".json")).write_text(json.dumps(e))
+        rc, out = run_gate(d)
+        results.append(("a-dispute-is-printed-and-does-not-fail-the-row",
+                        "accept, dispute shown",
+                        rc == 0 and "DISPUTED:" in out and "issues/46" in out, out))
+
+    # --- a dispute cannot be used to improve a row either ---
+    # Symmetry check. Neither new field may move a verdict in EITHER direction, or it
+    # becomes a lever. A disputed row earns one more line and the same exit code.
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        base = copy.deepcopy(GOOD)
+        (d / (base["slug"] + ".json")).write_text(json.dumps(base))
+        rc_a, out_a = run_gate(d)
+        disp = copy.deepcopy(GOOD)
+        for ev in _all_evidence(disp):
+            ev["disputed"] = {"url": "https://github.com/OWASP/quantum-security-project/issues/46",
+                              "note": "every cell on this row is disputed"}
+        (d / (disp["slug"] + ".json")).write_text(json.dumps(disp))
+        rc_b, out_b = run_gate(d)
+        n = len(list(_all_evidence(disp)))
+        results.append(("a-dispute-changes-the-exit-code-for-nobody", "accept both",
+                        rc_a == 0 and rc_b == 0
+                        and out_b.count("DISPUTED:") == n, out_a + out_b))
 
     # --- a FAILING row prints its independence counts too ---
     # The print was in the pass branch only, withholding the mix from the one reader who

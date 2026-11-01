@@ -81,7 +81,12 @@
       "source": "https://raw.githubusercontent.com/openssl/openssl/refs/tags/openssl-3.5.0/ssl/t1_lib.c",
       "excerpt": "\"?*X25519MLKEM768 / ?*X25519:?secp256r1 / ?X448:?secp384r1:?secp521r1 / ?ffdhe2048:?ffdhe3072\"",
       "verbatim": "yes",
-      "verified_on": "2026-10-31"
+      "verified_on": "2026-10-31",
+      "verification": {
+       "verified_by": "ossumpossum (the row's maintainer: this is a self-attestation, not independent verification)",
+       "verified_on": "2026-11-01",
+       "method": "Fetched ssl/t1_lib.c at tag openssl-3.5.0 and confirmed the excerpt is a literal substring of the served bytes."
+      }
      }
     },
     {

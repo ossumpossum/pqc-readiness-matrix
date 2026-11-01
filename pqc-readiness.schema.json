@@ -537,6 +537,12 @@
           "description": "Optional. What a reader would re-run, against which pinned artifacts, to reach the same answer. Split out of the independence enum, where it was the value `independently-reproducible`.",
           "$comment": "This field earns a row nothing. Nothing in validate.py re-runs anything, so the field is an instruction to a human reader and the gate treats it as census data. It is deliberately not a grade: in the first round the strongest-sounding enum value was the better-rewarded lie, because a fabricated row recovered a pass for one character of basis text and then printed as the most independent row in the repo. See gap 3 in README.md for the check that would make it mean something."
         },
+        "verification": {
+          "$ref": "#/$defs/verification"
+        },
+        "disputed": {
+          "$ref": "#/$defs/disputed"
+        },
         "source": {
           "type": "string",
           "pattern": "^https://",
@@ -572,6 +578,62 @@
           }
         }
       ]
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified_by",
+        "verified_on",
+        "method"
+      ],
+      "description": "An INDEPENDENT verification of this evidence, attributed to whoever performed it. Optional, and never inferred from an `independence` value: a `third-party` label says who wrote the source, not that anybody checked it. Raised by @leprecha1 on issue #46.",
+      "properties": {
+        "verified_by": {
+          "$ref": "#/$defs/nonEmpty",
+          "maxLength": 120,
+          "description": "Who verified it, as a name, handle or organisation. Required, because an unattributed attestation is the thing this field exists to replace. The row's own maintainer may appear here, and that is not independent verification: it is a self-attestation and a reader can see whose name it carries."
+        },
+        "verified_on": {
+          "$ref": "#/$defs/date"
+        },
+        "method": {
+          "$ref": "#/$defs/nonEmpty",
+          "maxLength": 300,
+          "description": "What they did, specifically enough for a third person to repeat."
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "Optional link to the attestation itself."
+        }
+      },
+      "$comment": "Distinct from `reproduction`, which names what a reader COULD re-run. This field records that somebody DID, and who. The gate reads neither: it counts them and changes no verdict, because nothing offline can check either claim."
+    },
+    "disputed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "note"
+      ],
+      "description": "A recorded disagreement with this evidence, pointing at an issue or discussion. Optional. This is gap 5's mechanism, proposed by @leprecha1 on issue #46 as a lightweight alternative to an adjudication workflow: the disagreement becomes part of the row, travels with it, and is printed by the gate.",
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "The issue, PR or discussion where the disagreement is argued."
+        },
+        "note": {
+          "$ref": "#/$defs/nonEmpty",
+          "maxLength": 300,
+          "description": "What is disputed, in one sentence."
+        },
+        "raised_on": {
+          "$ref": "#/$defs/date"
+        }
+      },
+      "$comment": "Deliberately not a status. The gate does not decide who is right, and a disputed row still passes; the point is that a reader who disagrees has somewhere in the DATA to say so, which printing provenance never gave them. It also cannot be gamed: adding a dispute makes a row noisier, so nothing rewards a false one."
     }
   }
 }
