@@ -604,11 +604,11 @@
         },
         "source": {
           "type": "string",
-          "pattern": "^https://[^\\s\\r\\n\\t]*$",
+          "pattern": "^https://[^\\s\\r\\n\\t\\u0085\\u2028\\u2029]*$",
           "description": "Optional link to the attestation itself."
         }
       },
-      "$comment": "Distinct from `reproduction`, which names what a reader COULD re-run. This field records that somebody DID, and who. The gate reads neither: it counts them and changes no verdict, because nothing offline can check either claim."
+      "$comment": "Distinct from `reproduction`, which names what a reader COULD re-run. This field records that somebody DID, and who. The gate reads neither: it counts them and changes no verdict, because nothing offline can check either claim. Known and unchecked: `verified_on` may predate the evidence it attests. Measured, a verification dated 2000-01-01 against evidence verified 2026-10-31 passes at exit 0. That one IS checkable offline and is recorded as a gap rather than fixed here."
     },
     "disputed": {
       "type": "object",
@@ -621,7 +621,7 @@
       "properties": {
         "url": {
           "type": "string",
-          "pattern": "^https://[^\\s\\r\\n\\t]*$",
+          "pattern": "^https://[^\\s\\r\\n\\t\\u0085\\u2028\\u2029]*$",
           "description": "The issue, PR or discussion where the disagreement is argued."
         },
         "note": {
@@ -633,14 +633,14 @@
           "$ref": "#/$defs/date"
         }
       },
-      "$comment": "Deliberately not a status. The gate does not decide who is right, and a disputed row still passes; the point is that a reader who disagrees has somewhere in the DATA to say so, which printing provenance never gave them. It also cannot be gamed: adding a dispute makes a row noisier, so nothing rewards a false one."
+      "$comment": "Deliberately not a status. The gate does not decide who is right, and a disputed row still passes; the point is that a reader who disagrees has somewhere in the DATA to say so, which printing provenance never gave them. An earlier version of this comment claimed the field cannot be gamed. It was written before it was tested and it was wrong: `note` and `url` are the first author-controlled free text this gate prints unescaped, and a line separator in `note` forged a complete passing row inside the gate's own report at exit 0, twice over (LF at c54cbef, then U+2028 / U+2029 / U+0085 through that fix at a1261d0). The narrower true statement: a dispute earns no credit and changes no verdict, so nothing rewards adding a false one."
     },
     "oneLine": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[^\\r\\n\\t\\f\\v]*\\S[^\\r\\n\\t\\f\\v]*$",
-      "description": "One line of text, with no control characters. Used for anything the gate PRINTS, because a newline in a printed field forges output.",
-      "$comment": "Added 2026-11-01 after a measured forgery: a newline in `disputed.note` printed a complete fake passing row and a second 'N of N entries valid' line inside the gate's real report, at exit 0. `nonEmpty` requires one non-space character and admits newlines, which is fine for a field nobody prints and not fine for one the gate echoes."
+      "pattern": "^[^\\r\\n\\t\\f\\v\\u0085\\u2028\\u2029]*\\S[^\\r\\n\\t\\f\\v\\u0085\\u2028\\u2029]*$",
+      "description": "One line of text: no control characters, no format characters and no line or paragraph separator. Used for anything the gate PRINTS, because a line break in a printed field forges output.",
+      "$comment": "Added 2026-11-01 after a measured forgery: a newline in `disputed.note` printed a complete fake passing row and a second 'N of N entries valid' line inside the gate's real report, at exit 0. Widened the same day after a second measurement: U+2028, U+2029 and U+0085 each defeated the first fix and reproduced the forged row, also at exit 0. This pattern is now defence in depth and NOT the gate. jsonschema runs Python `re`, where `$` also matches before a trailing newline, so a value ending in one satisfies this pattern; validate.py instead requires every printed author field to equal its own sanitised form, which has no regex dialect in it."
     }
   }
 }

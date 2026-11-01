@@ -329,9 +329,16 @@ the first run.
    an issue or discussion URL plus a one-sentence note. The disagreement becomes part of the row,
    travels with it, and the gate prints it.
    What it does **not** do is decide. A disputed cell may well be correct, so a dispute never fails
-   a row; it also cannot be gamed, because adding one makes a row noisier and nothing rewards a
-   false one. Still open underneath: a claim cannot carry two independent sources, and a second
-   attestation is one `verification` block rather than a structure for several.
+   a row, and a dispute earns no credit either, so nothing rewards adding a false one. An earlier
+   version of this paragraph said the block "cannot be gamed". That was written before it was
+   tested and it was wrong: `disputed.note` and `disputed.url` are the first author-controlled free
+   text this gate prints unescaped, and a line separator in `note` forged a complete passing row
+   plus a second "N of N entries valid" line inside the gate's own report, at exit 0 — twice, once
+   through LF and again through U+2028, U+2029 and U+0085 defeating the fix for it. Both are closed
+   now, by a category test rather than a character denylist, and by a check that every printed
+   author field equals its own sanitised form.
+   Still open underneath: a claim cannot carry two independent sources, and a second attestation is
+   one `verification` block rather than a structure for several.
 6. **A PR is checked by its own copy of the gate.** The workflow checks out the PR head, so a PR that
    edits both a row and `validate.py` grades itself, and a green check on such a PR means nothing. This
    is inherent to `pull_request` CI rather than specific to this design; the mitigation is human review
@@ -359,6 +366,27 @@ the first run.
     an expected message per case is the real one. This gap previously said "32 cases" while two
     sections earlier the same file said 36, which is the defect this whole document is about, found in
     its own text.
+
+
+### What `verification` and `disputed` do not do
+
+Added 2026-11-01 with the fields themselves, because each of these was measured and none of them is
+visible in the schema:
+
+1. **A verification cannot be checked, only counted.** `verified_by: "NIST"` with `method: "x"`
+   passes at exit 0 and the census then reports `verified=9/9`. The gate checks that the strings are
+   present; nothing offline can check that they are true. It is a more credible-looking way to make
+   an unchecked claim than the field it replaced.
+2. **`verified_by` is never printed.** A self-attestation by the row's own maintainer and a genuine
+   third-party one are identical in the report. This is the mix-hiding problem that printing the
+   provenance census was added to fix, reintroduced one layer up.
+3. **The census is paddable in both directions.** It counts every evidence block, while the per-axis
+   provenance counts only status-earning ones, so three appended implementations nobody's status
+   rests on read as `verified=4/12` where the row was `verified=1/9`, and three without attestations
+   read as `1/12`. Both measured.
+4. **A verification may predate the evidence it attests.** `verified_on: "2000-01-01"` against
+   evidence verified 2026-10-31 passes at exit 0. Unlike the three above, this one is checkable
+   offline, and it is not checked.
 
 ## On serialisation
 

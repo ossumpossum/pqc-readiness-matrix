@@ -455,6 +455,158 @@ def forged_report_line_in_verification_method(e):
                               "method": "looked\nok   forged.json  verified=9/9"}
 
 
+# The https field paths this gate's host check is wired to reach, as of 2026-11-01. This is a
+# BASELINE, not a description: the coverage case asserts the schema declares exactly these, so
+# adding a fifth https field fails the suite until it is routed through `_every_url` and added
+# here deliberately. Three times a new URL field was added without its sibling's check
+# (document.url after evidence.source, then verification.source and disputed.url together), so
+# the fourth occurrence should cost a failing test rather than someone else's review.
+_ROUTED_HTTPS_PATHS = frozenset({
+    "evidence.source",
+    "document.url",
+    "verification.source",
+    "disputed.url",
+})
+
+
+def _https_coverage():
+    """(declared paths, urls produced, sentinels never produced) for the coverage case.
+
+    Each routed field is given a unique sentinel URL in a copy of the real exemplar, then
+    `_every_url` is run over it and the sentinels are looked for in what it yields. Comparing
+    VALUES sidesteps every question about how the enumeration labels its fields.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_validate_for_coverage",
+                                                  ROOT / "validate.py")
+    validate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validate)
+
+    schema = json.loads((ROOT / "pqc-readiness.schema.json").read_text())
+    declared = set()
+
+    def walk_schema(node, path=()):
+        if isinstance(node, dict):
+            pattern = node.get("pattern")
+            if isinstance(pattern, str) and pattern.startswith("^https://"):
+                parts = [p for p in path
+                         if p not in ("properties", "items", "$defs", "anyOf", "oneOf")]
+                declared.add(".".join(parts[-2:]) if len(parts) >= 2 else ".".join(parts))
+            for key, value in node.items():
+                walk_schema(value, path + (key,))
+        elif isinstance(node, list):
+            for item in node:
+                walk_schema(item, path)
+
+    walk_schema(schema)
+
+    entry = json.loads((ROOT / "protocols" / "tls-1-3-key-establishment.json").read_text())
+    sentinels = {}
+    for index, ev in enumerate(_all_evidence(entry)):
+        ev["source"] = sentinels.setdefault(
+            f"evidence.source.{index}", f"https://example.org/sentinel-src-{index}")
+        ev["verification"] = {
+            "verified_by": "x", "verified_on": dt.date.today().isoformat(), "method": "x",
+            "source": sentinels.setdefault(
+                "verification.source", "https://example.org/sentinel-verification"),
+        }
+        ev["disputed"] = {
+            "url": sentinels.setdefault("disputed.url",
+                                        "https://example.org/sentinel-disputed"),
+            "note": "x",
+        }
+    docs = entry.setdefault("axes", {}).setdefault("standardisation", {}).setdefault(
+        "documents", [])
+    if not docs:
+        docs.append({"id": "RFC 9999"})
+    docs[0]["url"] = sentinels.setdefault("document.url",
+                                          "https://example.org/sentinel-document")
+
+    produced = {url for _, url in validate._every_url(entry) if url}
+    unreached = sorted(name for name, url in sentinels.items() if url not in produced)
+    return declared, produced, unreached
+
+
+def forged_report_line_u2028(e):
+    """U+2028 LINE SEPARATOR in `disputed.note` defeated the LF fix and forged the row again.
+
+    Measured at a1261d0, exit 0: this note printed a complete fake
+    `ok forged-row.json ... verified=9/9` line and a second "1 of 1 entries valid" inside the
+    real report, which is character-for-character the forgery a1261d0's own commit message
+    says it closed. U+2029 and U+0085 did the same. `str.splitlines()` treats all three as
+    line breaks, as do GitHub Actions' log viewer and most JavaScript log viewers.
+
+    The lesson is in the fix rather than in this fixture: both layers were a denylist of the
+    spellings I had thought of, which is the same reason the reserved-host check needed six
+    passes. The sanitiser now tests the Unicode general category instead.
+    """
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+        "note": "nothing to see\u2028ok   forged-row.json  verified=9/9\u2028\u20281 of 1 entries valid",
+    }
+
+
+def forged_report_line_u2029(e):
+    """U+2029 PARAGRAPH SEPARATOR, same measurement."""
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+        "note": "nothing to see\u2029ok   forged-row.json  verified=9/9",
+    }
+
+
+def forged_report_line_nel(e):
+    """U+0085 NEL, same measurement. A C1 control, so no ASCII denylist was ever going to
+    catch it and no reader of the report can see it."""
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+        "note": "nothing to see\u0085ok   forged-row.json  verified=9/9",
+    }
+
+
+def bidi_override_in_disputed_note(e):
+    """U+202E RIGHT-TO-LEFT OVERRIDE reorders a printed line without adding one.
+
+    Not a forgery of a new row, which is why it was not in the first fix's scope, but the same
+    class: author text that changes what the report APPEARS to say. Category Cf, so the
+    category test covers it for free, and this fixture is what makes that deliberate rather
+    than incidental.
+    """
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+        "note": "disputed \u202e9/9=deifirev",
+    }
+
+
+def trailing_newline_in_disputed_note(e):
+    """A trailing newline, which the SCHEMA still admits and the semantic check catches.
+
+    jsonschema runs Python `re`, where `$` also matches immediately before a final newline, so
+    `"disputed anyway\n"` satisfies even the widened `$defs/oneLine` pattern (measured). This
+    fixture is the reason the gate on printed fields is a comparison against the sanitiser's
+    own output rather than the regex: the comparison has no dialect in it.
+    """
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+        "note": "disputed anyway\n",
+    }
+
+
+def forged_report_line_in_independence_basis(e):
+    """`independence_basis` is author free text and HAS been printed since 40f737f.
+
+    It never forged a line only because jsonschema builds its message with `repr`, which
+    escapes the break. That is a property of jsonschema's message formatting, not of this
+    gate, and it is not a thing to rely on: the previous round's claim that disputed/
+    verification were "the first author-controlled free-text fields this gate has ever
+    printed" dropped exactly that qualifier.
+    """
+    for ev in _all_evidence(e):
+        ev["independence_basis"] = (
+            "A basis\u2028ok   forged-row.json  verified=9/9"
+        )
+
+
 MUST_FAIL = {
     "no-documents-but-published": no_documents,
     "blank-implementation-name": blank_implementation,
@@ -546,6 +698,12 @@ MUST_FAIL = {
     "forged-report-line-in-disputed-note": forged_report_line_in_disputed_note,
     "forged-report-line-in-disputed-url": forged_report_line_in_disputed_url,
     "forged-report-line-in-verification-method": forged_report_line_in_verification_method,
+    "forged-report-line-u2028": forged_report_line_u2028,
+    "forged-report-line-u2029": forged_report_line_u2029,
+    "forged-report-line-nel": forged_report_line_nel,
+    "bidi-override-in-disputed-note": bidi_override_in_disputed_note,
+    "trailing-newline-in-disputed-note": trailing_newline_in_disputed_note,
+    "forged-report-line-in-independence-basis": forged_report_line_in_independence_basis,
 }
 
 
@@ -1083,36 +1241,24 @@ def main():
                         rc != 0 and "implem=default-on/first-party" in fail_line
                         and "oldest_evidence=" in fail_line, out))
 
-    # --- every https field in the schema goes through the reserved-host check ---
-    # Three times now a new URL field has been added without its sibling's check: the check
-    # was written for evidence.source, document.url needed it separately, and c54cbef added
-    # verification.source and disputed.url and routed neither, so
-    # https://example.invalid/attestation validated with exit 0 in the field whose whole
-    # purpose is that a reader can go and look. Counting the schema's https fields against
-    # validate.py's single enumeration makes the fourth occurrence a failure here instead of
-    # a finding in someone else's review.
-    schema = json.loads((ROOT / "pqc-readiness.schema.json").read_text())
-    https_fields = []
-
-    def _walk_https(o, path=""):
-        if isinstance(o, dict):
-            pat = o.get("pattern")
-            if isinstance(pat, str) and pat.startswith("^https://"):
-                https_fields.append(path)
-            for k, v in o.items():
-                _walk_https(v, path + "/" + k)
-        elif isinstance(o, list):
-            for i, v in enumerate(o):
-                _walk_https(v, path + "[" + str(i) + "]")
-
-    _walk_https(schema)
-    vsrc = (ROOT / "validate.py").read_text()
-    names = {p.rsplit("/", 1)[-1] for p in https_fields}
-    unchecked = sorted(n for n in names if n not in vsrc)
-    results.append(("every-https-field-is-host-checked", "all URLs enumerated",
-                    len(https_fields) >= 4 and "_every_url" in vsrc and not unchecked,
-                    f"schema https fields: {sorted(names)}; not mentioned in validate.py: "
-                    f"{unchecked}"))
+    # --- every https field the SCHEMA declares is one the host check actually sees ---
+    # The first version of this case compared field BASENAMES against substrings of
+    # validate.py's text. Both basenames ("url", "source") appear there for unrelated
+    # reasons, so the comparison was empty whatever the schema said. Measured: an
+    # `evidence.url` field with pattern ^https:// routed nowhere left this case printing
+    # "and did" while `https://example.com/fake-attestation` sat unchecked in it.
+    #
+    # Two assertions now, and neither can be satisfied by a name:
+    #   1. The set of https field PATHS the schema declares is exactly the four that are
+    #      routed. A fifth trips this whatever it is called, which is the whole purpose.
+    #   2. Each of those four, given a UNIQUE url, comes back out of `_every_url`. So the
+    #      enumeration is proven to reach every one of them rather than asserted to.
+    declared, produced, unreached = _https_coverage()
+    results.append(("every-https-field-is-host-checked", "all URL PATHS enumerated",
+                    declared == _ROUTED_HTTPS_PATHS and not unreached,
+                    f"schema declares {sorted(declared)}; routed baseline "
+                    f"{sorted(_ROUTED_HTTPS_PATHS)}; sentinels _every_url never yielded: "
+                    f"{unreached}; it yielded {len(produced)} urls"))
 
     # --- the manifest must fail CLOSED, not open ---
     # Deleting top10.json previously made every related_owasp_entries value pass: a row citing

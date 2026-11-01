@@ -27,6 +27,7 @@ import datetime as dt
 import json
 import ipaddress
 import re
+import unicodedata
 import pathlib
 import sys
 import unicodedata
@@ -95,17 +96,84 @@ RESERVED_DOMAINS = (
 )
 
 
-def _oneline(s):
-    """Collapse anything that could forge a line of this report.
+# A character is forgeable if its Unicode general category is one of these: Cc (every C0 and
+# C1 control, which covers CR, LF, TAB, VT, FF, the file/group/record separators and U+0085
+# NEL), Cf (format characters, including the bidi overrides, which can REORDER a printed line
+# without adding one), Zl (U+2028 LINE SEPARATOR) and Zp (U+2029 PARAGRAPH SEPARATOR).
+#
+# This is deliberately a PROPERTY rather than a list of characters. The previous version was
+# `[\r\n\t\f\v\x00-\x1f\x7f]+`, a denylist of the spellings I had thought of, and
+# U+2028, U+2029 and U+0085 each walked through it and forged a complete passing row at exit 0
+# (measured at a1261d0). The host check needed six passes for the same reason. A denylist of
+# characters never finishes; a category test covers the spelling nobody has found yet.
+_FORGEABLE_CATEGORIES = frozenset(("Cc", "Cf", "Zl", "Zp"))
 
-    The second of two layers, and the load-bearing one. Measured at c54cbef: a newline in
-    `disputed.note` printed a complete fake `ok <row>.json ... verified=9/9` line and a
-    second "1 of 1 entries valid" inside the real output, at exit 0. The schema now rejects
-    control characters in the fields that get printed, but a schema rule only protects the
-    fields somebody remembered; this protects every string this gate ever echoes, including
-    the next printed field added by someone who has not read this comment.
+
+def _forgeable(ch):
+    return unicodedata.category(ch) in _FORGEABLE_CATEGORIES
+
+
+def _oneline(s):
+    """Collapse anything that could forge or reorder a line of this report.
+
+    The second of two layers, and the load-bearing one for any field somebody adds without
+    reading this. Measured at c54cbef: a newline in `disputed.note` printed a complete fake
+    `ok <row>.json ... verified=9/9` line and a second "1 of 1 entries valid" inside the real
+    output, at exit 0. Measured again at a1261d0: U+2028, U+2029 and U+0085 did exactly the
+    same thing through the fix for that.
+
+    Each maximal run of forgeable characters becomes one space, which is what the previous
+    regex did for the subset it knew about.
     """
-    return re.sub(r"[\r\n\t\f\v\x00-\x1f\x7f]+", " ", str(s))
+    out = []
+    in_run = False
+    for ch in str(s):
+        if _forgeable(ch):
+            if not in_run:
+                out.append(" ")
+            in_run = True
+        else:
+            out.append(ch)
+            in_run = False
+    return "".join(out)
+
+
+def _oneline_self_test():
+    """Every line break `str.splitlines()` recognises must be collapsed by `_oneline`.
+
+    This is the test the character denylist could not pass, and it is run on every invocation
+    rather than living only in tests/, because the failure it guards against is silent: a gate
+    whose sanitiser misses a separator reports a forged row as `ok` and exits 0.
+    """
+    missed = [
+        hex(ord(ch))
+        for ch in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+        if len(("a" + ch + "b").splitlines()) > 1 and _oneline("a" + ch + "b") != "a b"
+    ]
+    if missed:
+        die(f"sanitiser misses line separators {missed}: every printed field is forgeable")
+
+
+def _printed_author_fields(entry):
+    """(label, value) for every author-controlled string this gate PRINTS into its report.
+
+    `independence_basis` is here because it has been printed since 40f737f, inside a schema
+    message built with `repr`. That `repr` is the only reason it never forged a line, which
+    makes it a property of jsonschema's message formatting rather than of this gate.
+    """
+    for ev in walk_evidence(entry):
+        if ev.get("independence_basis"):
+            yield "independence_basis", ev["independence_basis"]
+        d = ev.get("disputed")
+        if isinstance(d, dict):
+            for key in ("url", "note"):
+                if d.get(key):
+                    yield f"disputed.{key}", d[key]
+        v = ev.get("verification")
+        if isinstance(v, dict):
+            for key in ("verified_by", "method", "source"):
+                if v.get(key):
+                    yield f"verification.{key}", v[key]
 
 
 def die(msg):
@@ -447,6 +515,21 @@ def check_entry(entry, today, top10):
         if bad:
             errs.append(f"{label} host {bad[1]!r} {_why_not_citable(bad[0])}")
 
+    # --- a printed author field must survive its own sanitiser unchanged ---
+    # This, not the schema pattern, is the gate on report forgery. `$defs/oneLine` keeps a
+    # widened pattern as defence in depth, but it cannot be the thing relied on: jsonschema
+    # runs Python `re`, where `$` also matches before a trailing newline, so "disputed
+    # anyway\n" satisfies even the corrected pattern (measured). Comparing the value with
+    # `_oneline(value)` has no regex dialect in it at all: if the printer would have had to
+    # collapse something, the row fails here and the forged line is never printed.
+    for label, value in _printed_author_fields(entry):
+        if _oneline(value) != value:
+            errs.append(
+                f"{label} contains a character the report printer would collapse "
+                f"(a line separator, control or format character); it is printed, so it "
+                f"must be one line of plain text"
+            )
+
     # --- NOT HERE: any warning keyed to WHICH independence value an author chose ---
     # Two were tried and both were removed, because each rewarded the lie it was meant to
     # expose. 40f737f warned when an axis rested only on weak evidence: an honest row
@@ -472,7 +555,15 @@ def check_entry(entry, today, top10):
     # disputed evidence to an issue and let the disagreement travel with the row.
     #
     # It does NOT fail the row. The gate does not adjudicate, and a disputed cell may well
-    # be correct. It also cannot be gamed, because a dispute makes a row noisier: nothing
+    # be correct.
+    #
+    # An earlier version of this comment said the field "cannot be gamed". That was written
+    # before it was tested and it was wrong in the most direct way available: `note` and `url`
+    # are the first author-controlled free text this gate prints UNESCAPED, and a line
+    # separator in `note` forged a complete passing row plus a second "N of N entries valid"
+    # inside the gate's own report, at exit 0. Twice: once through LF at c54cbef, and again
+    # through U+2028, U+2029 and U+0085 at a1261d0, each defeating the fix for the first.
+    # What is true is narrower: a dispute earns no credit and changes no verdict, so nothing
     # here rewards adding a false one.
     for ev in walk_evidence(entry):
         d = ev.get("disputed")
@@ -572,6 +663,7 @@ def check_entry(entry, today, top10):
 
 
 def main():
+    _oneline_self_test()
     validator = load_validator()
     pdir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "protocols"
     if not pdir.is_dir():
@@ -609,7 +701,7 @@ def main():
         try:
             entry = json.loads(f.read_text())
         except json.JSONDecodeError as e:
-            print(f"FAIL {f.name}: not valid JSON at line {e.lineno} col {e.colno}: {e.msg}")
+            print(f"FAIL {_oneline(f.name)}: not valid JSON at line {e.lineno} col {e.colno}: {e.msg}")
             failed += 1
             continue
 
@@ -678,16 +770,16 @@ def main():
 
         if errs:
             failed += 1
-            print(f"FAIL {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
+            print(f"FAIL {_oneline(f.name)}  oldest_evidence={age}  {summary}  indep={mix}")
             for e in errs:
                 print(f"    {_oneline(e)}")
         else:
-            print(f"ok   {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
+            print(f"ok   {_oneline(f.name)}  oldest_evidence={age}  {summary}  indep={mix}")
         for w in warns:
             print(f"     warn: {_oneline(w)}")
 
     for p in skipped:
-        print(f"FAIL {p.relative_to(pdir)}: under protocols/ but not a .json entry; a renderer may read it")
+        print(f"FAIL {_oneline(p.relative_to(pdir))}: under protocols/ but not a .json entry; a renderer may read it")
         failed += 1
 
     print()
