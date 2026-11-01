@@ -392,6 +392,69 @@ def disputed_with_blank_note(e):
                       "note": "   "}
 
 
+def reserved_verification_source(e):
+    """c54cbef added verification.source and did not host-check it.
+
+    Measured before the fix: https://example.invalid/attestation validated with exit 0, in
+    the field whose entire purpose is that a reader can go and look at the attestation. That
+    host is the one the README calls "what kills the fabricated row that motivated the #46
+    changes", so the attestation layer was accepting precisely what the evidence layer
+    rejects.
+    """
+    for ev in _all_evidence(e):
+        ev["verification"] = {"verified_by": "someone", "verified_on": "2026-11-01",
+                              "method": "looked at it",
+                              "source": "https://example.invalid/attestation"}
+
+
+def reserved_verification_source_int_ipv4(e):
+    """The obfuscated IPv4 form the previous commit was written to close, one field over."""
+    for ev in _all_evidence(e):
+        ev["verification"] = {"verified_by": "someone", "verified_on": "2026-11-01",
+                              "method": "looked at it",
+                              "source": "https://3221225985/report"}
+
+
+def reserved_disputed_url(e):
+    """A dispute pointing at an RFC 5737 documentation address argues nowhere."""
+    for ev in _all_evidence(e):
+        ev["disputed"] = {"url": "https://192.0.2.1/issue", "note": "disputed"}
+
+
+def forged_report_line_in_disputed_note(e):
+    """A newline in `disputed.note` forged a passing row in the gate's own report.
+
+    Measured at c54cbef, exit 0: the note below printed a complete fake
+    `ok ssh-2-kex.json ... verified=9/9` line AND a second "1 of 1 entries valid" inside the
+    real output. `disputed.note` and `disputed.url` are the FIRST author-controlled
+    free-text fields this gate ever printed, so the commit that answered the contestability
+    ask is the commit that opened a report-forgery surface. Two layers now stop it: the
+    schema rejects control characters in printed fields, and the printer collapses them
+    anyway for fields nobody has thought of yet.
+    """
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/OWASP/quantum-security-project/issues/46",
+        "note": "nothing to see\nok   ssh-2-kex.json  oldest_evidence=0d  verified=9/9",
+    }
+
+
+def forged_report_line_in_disputed_url(e):
+    """The same forgery through the URL, which is also printed."""
+    e["axes"]["standardisation"]["evidence"]["disputed"] = {
+        "url": "https://github.com/x\nok   forged.json  verified=9/9",
+        "note": "a dispute",
+    }
+
+
+def forged_report_line_in_verification_method(e):
+    """`verification` strings are not printed today, but they are author free text in a
+    printed-adjacent block, so they carry the same one-line constraint rather than relying
+    on nobody ever printing them."""
+    for ev in _all_evidence(e):
+        ev["verification"] = {"verified_by": "someone", "verified_on": "2026-11-01",
+                              "method": "looked\nok   forged.json  verified=9/9"}
+
+
 MUST_FAIL = {
     "no-documents-but-published": no_documents,
     "blank-implementation-name": blank_implementation,
@@ -477,6 +540,12 @@ MUST_FAIL = {
     "disputed-without-url": disputed_without_url,
     "disputed-with-non-https-url": disputed_with_non_https_url,
     "disputed-with-blank-note": disputed_with_blank_note,
+    "reserved-host-in-verification-source": reserved_verification_source,
+    "reserved-int-ipv4-in-verification-source": reserved_verification_source_int_ipv4,
+    "reserved-host-in-disputed-url": reserved_disputed_url,
+    "forged-report-line-in-disputed-note": forged_report_line_in_disputed_note,
+    "forged-report-line-in-disputed-url": forged_report_line_in_disputed_url,
+    "forged-report-line-in-verification-method": forged_report_line_in_verification_method,
 }
 
 
@@ -1013,6 +1082,37 @@ def main():
         results.append(("failing-rows-print-axis-provenance", "reject, with provenance",
                         rc != 0 and "implem=default-on/first-party" in fail_line
                         and "oldest_evidence=" in fail_line, out))
+
+    # --- every https field in the schema goes through the reserved-host check ---
+    # Three times now a new URL field has been added without its sibling's check: the check
+    # was written for evidence.source, document.url needed it separately, and c54cbef added
+    # verification.source and disputed.url and routed neither, so
+    # https://example.invalid/attestation validated with exit 0 in the field whose whole
+    # purpose is that a reader can go and look. Counting the schema's https fields against
+    # validate.py's single enumeration makes the fourth occurrence a failure here instead of
+    # a finding in someone else's review.
+    schema = json.loads((ROOT / "pqc-readiness.schema.json").read_text())
+    https_fields = []
+
+    def _walk_https(o, path=""):
+        if isinstance(o, dict):
+            pat = o.get("pattern")
+            if isinstance(pat, str) and pat.startswith("^https://"):
+                https_fields.append(path)
+            for k, v in o.items():
+                _walk_https(v, path + "/" + k)
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                _walk_https(v, path + "[" + str(i) + "]")
+
+    _walk_https(schema)
+    vsrc = (ROOT / "validate.py").read_text()
+    names = {p.rsplit("/", 1)[-1] for p in https_fields}
+    unchecked = sorted(n for n in names if n not in vsrc)
+    results.append(("every-https-field-is-host-checked", "all URLs enumerated",
+                    len(https_fields) >= 4 and "_every_url" in vsrc and not unchecked,
+                    f"schema https fields: {sorted(names)}; not mentioned in validate.py: "
+                    f"{unchecked}"))
 
     # --- the manifest must fail CLOSED, not open ---
     # Deleting top10.json previously made every related_owasp_entries value pass: a row citing

@@ -8,7 +8,7 @@ pqc-readiness.schema.json   JSON Schema 2020-12, the contract
 protocols/*.json            one row each, filename stem == slug
 top10.json                  manifest that related_owasp_entries is checked against
 validate.py                 the gate: schema + semantics + cross-file
-tests/test_gate.py          96 behaviours the gate must have
+tests/test_gate.py          103 behaviours the gate must have
 requirements.txt            pinned, hash-pinned for CI
 ```
 
@@ -247,7 +247,7 @@ round the strongest-sounding enum value was the better-rewarded lie.
   printing success, and a missing or empty `top10.json` is refused rather than treated as an empty
   allowlist, which previously let a row cite a non-existent entry and validate.
 
-`tests/test_gate.py` covers 96 behaviours, most of which exist because an earlier version of this gate
+`tests/test_gate.py` covers 103 behaviours, most of which exist because an earlier version of this gate
 accepted a row it should have rejected. `tests/test_gate.py --mutate` disables one layer of the gate at
 a time in a throwaway copy and re-runs everything, so the suite's dependence on each layer is
 measurable rather than asserted.
@@ -256,13 +256,13 @@ The report splits by what each case expects, because the aggregate was uninterpr
 expecting **rejection** can die when the exit code is forced to success, and a case expecting
 acceptance cannot, since the mutant agrees with it. Mixing the two made that mutant's number drift
 upward every time an acceptance case was added, which read as the suite weakening when it was the
-metric mixing populations. Measured 2026-10-31, against 78 rejection cases and 18 acceptance cases:
+metric mixing populations. Measured 2026-10-31, against 84 rejection cases and 19 acceptance cases:
 
 | Mutant | Rejection cases killed | Acceptance cases killed |
 |---|---|---|
-| semantic layer returns no findings | 48 of 78 | 4 of 18 |
-| schema layer yields no errors | 19 of 78 | 0 of 18 |
-| exit code always reports success | 76 of 78 | 0 of 18 |
+| semantic layer returns no findings | 51 of 84 | 4 of 19 |
+| schema layer yields no errors | 22 of 84 | 0 of 19 |
+| exit code always reports success | 82 of 84 | 0 of 19 |
 
 The two rejection cases that survive the exit-code mutant are the two that exit **2** through the
 gate's own `die()` path, so they do not depend on the mutated return at all. That is the correct
@@ -353,7 +353,7 @@ the first run.
 9. **Protocol names are free text.** Normalising to alphanumerics catches `TLS1.3` against `TLS 1.3`;
    it does not catch `TLSv1.3`, so two contradictory rows can still coexist under different spellings.
    The fix is a controlled vocabulary: an enum, or a committed protocol registry. Not here.
-10. **The suite asserts rejection, not the reason.** Most of the 78 rejection cases check only that
+10. **The suite asserts rejection, not the reason.** Most of the 84 rejection cases check only that
     the gate exits non-zero, not which rule fired, so an over-broad rule could satisfy several of them
     for the wrong reason. The mutation report and the population split are partial answers; asserting
     an expected message per case is the real one. This gap previously said "32 cases" while two

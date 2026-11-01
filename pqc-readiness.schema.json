@@ -590,7 +590,7 @@
       "description": "An INDEPENDENT verification of this evidence, attributed to whoever performed it. Optional, and never inferred from an `independence` value: a `third-party` label says who wrote the source, not that anybody checked it. Raised by @leprecha1 on issue #46.",
       "properties": {
         "verified_by": {
-          "$ref": "#/$defs/nonEmpty",
+          "$ref": "#/$defs/oneLine",
           "maxLength": 120,
           "description": "Who verified it, as a name, handle or organisation. Required, because an unattributed attestation is the thing this field exists to replace. The row's own maintainer may appear here, and that is not independent verification: it is a self-attestation and a reader can see whose name it carries."
         },
@@ -598,13 +598,13 @@
           "$ref": "#/$defs/date"
         },
         "method": {
-          "$ref": "#/$defs/nonEmpty",
+          "$ref": "#/$defs/oneLine",
           "maxLength": 300,
           "description": "What they did, specifically enough for a third person to repeat."
         },
         "source": {
           "type": "string",
-          "pattern": "^https://",
+          "pattern": "^https://[^\\s\\r\\n\\t]*$",
           "description": "Optional link to the attestation itself."
         }
       },
@@ -621,19 +621,26 @@
       "properties": {
         "url": {
           "type": "string",
-          "pattern": "^https://",
+          "pattern": "^https://[^\\s\\r\\n\\t]*$",
           "description": "The issue, PR or discussion where the disagreement is argued."
         },
         "note": {
-          "$ref": "#/$defs/nonEmpty",
+          "$ref": "#/$defs/oneLine",
           "maxLength": 300,
-          "description": "What is disputed, in one sentence."
+          "description": "What is disputed, in one sentence. Printed by the gate, so one line."
         },
         "raised_on": {
           "$ref": "#/$defs/date"
         }
       },
       "$comment": "Deliberately not a status. The gate does not decide who is right, and a disputed row still passes; the point is that a reader who disagrees has somewhere in the DATA to say so, which printing provenance never gave them. It also cannot be gamed: adding a dispute makes a row noisier, so nothing rewards a false one."
+    },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\r\\n\\t\\f\\v]*\\S[^\\r\\n\\t\\f\\v]*$",
+      "description": "One line of text, with no control characters. Used for anything the gate PRINTS, because a newline in a printed field forges output.",
+      "$comment": "Added 2026-11-01 after a measured forgery: a newline in `disputed.note` printed a complete fake passing row and a second 'N of N entries valid' line inside the gate's real report, at exit 0. `nonEmpty` requires one non-space character and admits newlines, which is fine for a field nobody prints and not fine for one the gate echoes."
     }
   }
 }

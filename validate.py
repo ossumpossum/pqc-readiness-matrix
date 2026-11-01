@@ -95,6 +95,19 @@ RESERVED_DOMAINS = (
 )
 
 
+def _oneline(s):
+    """Collapse anything that could forge a line of this report.
+
+    The second of two layers, and the load-bearing one. Measured at c54cbef: a newline in
+    `disputed.note` printed a complete fake `ok <row>.json ... verified=9/9` line and a
+    second "1 of 1 entries valid" inside the real output, at exit 0. The schema now rejects
+    control characters in the fields that get printed, but a schema rule only protects the
+    fields somebody remembered; this protects every string this gate ever echoes, including
+    the next printed field added by someone who has not read this comment.
+    """
+    return re.sub(r"[\r\n\t\f\v\x00-\x1f\x7f]+", " ", str(s))
+
+
 def die(msg):
     print(f"GATE ERROR: {msg}", file=sys.stderr)
     raise SystemExit(2)
@@ -118,6 +131,24 @@ def parse_date(s):
         return dt.date.fromisoformat(s)
     except (ValueError, TypeError):
         return None
+
+
+def _every_url(entry):
+    """(label, url) for every `^https://` field the schema defines. Keep in step with it.
+
+    There are four: evidence.source, document.url, verification.source and disputed.url.
+    The last two were added in c54cbef and were not host-checked until this function
+    existed, which is why the enumeration lives in one place rather than at each call site.
+    """
+    axes = entry.get("axes", {})
+    for ev in walk_evidence(entry):
+        yield "evidence source", ev.get("source")
+        for sub, key in (("verification", "source"), ("disputed", "url")):
+            obj = ev.get(sub)
+            if isinstance(obj, dict) and obj.get(key):
+                yield f"{sub}.{key}", obj.get(key)
+    for doc in axes.get("standardisation", {}).get("documents", []):
+        yield f"document {doc.get('id')} url", doc.get("url")
 
 
 def _why_not_citable(kind):
@@ -404,15 +435,17 @@ def check_entry(entry, today, top10):
     # userinfo and then by alternate IPv4 literal spellings, so see reserved_name for what is
     # measured rather than assumed. A hard failure, and it needs no network, which is what
     # makes it a gate rather than a warning.
-    for ev in walk_evidence(entry):
-        bad = reserved_name(ev.get("source"))
+    # EVERY https field in the schema, not the two somebody remembered. c54cbef added
+    # verification.source and disputed.url and routed neither through this check, so
+    # https://example.invalid/attestation validated with exit 0 in the field whose whole
+    # purpose is that a reader can go and look, and a dispute could point at an RFC 5737
+    # documentation address. That was the third new field added without its sibling's check,
+    # so the list is declared once here and tests/test_gate.py asserts its length: a fifth
+    # URL field has one obvious place to go and fails loudly if it does not go there.
+    for label, url in _every_url(entry):
+        bad = reserved_name(url)
         if bad:
-            errs.append(f"evidence source host {bad[1]!r} {_why_not_citable(bad[0])}")
-    for doc in axes.get("standardisation", {}).get("documents", []):
-        bad = reserved_name(doc.get("url"))
-        if bad:
-            errs.append(f"document {doc.get('id')} url host {bad[1]!r} "
-                        f"{_why_not_citable(bad[0])}")
+            errs.append(f"{label} host {bad[1]!r} {_why_not_citable(bad[0])}")
 
     # --- NOT HERE: any warning keyed to WHICH independence value an author chose ---
     # Two were tried and both were removed, because each rewarded the lie it was meant to
@@ -583,7 +616,13 @@ def main():
         schema_errs = sorted(validator.iter_errors(entry), key=lambda e: list(e.path))
         for e in schema_errs:
             loc = "/".join(str(p) for p in e.path) or "(root)"
-            errs.append(f"schema: {loc}: {e.message}")
+            # Capped. jsonschema embeds the offending value, so a 300-character note that
+            # happens to contain "1 of 1 entries valid" put that phrase into the report even
+            # once the forgery itself was rejected: harmless to a human, a false positive to
+            # anything grepping the log. The value is quoted and _oneline'd by the printer;
+            # this keeps it short enough not to impersonate a summary line.
+            msg = e.message if len(e.message) <= 220 else e.message[:217] + "..."
+            errs.append(f"schema: {loc}: {msg}")
 
         # Only run semantics on schema-valid input, and never let them abort the run.
         # Version 1 ran them regardless, so a document missing 'id' raised KeyError
@@ -641,11 +680,11 @@ def main():
             failed += 1
             print(f"FAIL {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
             for e in errs:
-                print(f"    {e}")
+                print(f"    {_oneline(e)}")
         else:
             print(f"ok   {f.name}  oldest_evidence={age}  {summary}  indep={mix}")
         for w in warns:
-            print(f"     warn: {w}")
+            print(f"     warn: {_oneline(w)}")
 
     for p in skipped:
         print(f"FAIL {p.relative_to(pdir)}: under protocols/ but not a .json entry; a renderer may read it")
